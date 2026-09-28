@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>RDC Coding Runtime</title>
+  <meta name="description" content="A disciplined local coding runtime for ChatGPT + Remote Desktop Commander." />
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #11182d;
+      --panel-2: #151f3a;
+      --text: #edf2ff;
+      --muted: #aab6d3;
+      --line: #273657;
+      --accent: #8fb3ff;
+      --accent-2: #b7c8ff;
+      --ok: #8bd4b3;
+      --warn: #f4ca7a;
+      --code: #0a0f1d;
+      --shadow: 0 20px 60px rgba(0,0,0,.24);
+      --radius: 18px;
+      --max: 1120px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 15% -10%, rgba(102,134,255,.18), transparent 28rem),
+        radial-gradient(circle at 88% 3%, rgba(94,211,170,.10), transparent 24rem),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.62;
+    }
+    a { color: var(--accent-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { width: min(var(--max), calc(100% - 36px)); margin: 0 auto; }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(14px);
+      background: rgba(11,16,32,.82);
+      border-bottom: 1px solid rgba(39,54,87,.8);
+    }
+    nav {
+      min-height: 66px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      justify-content: space-between;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.02em; }
+    .mark {
+      width: 30px; height: 30px; border-radius: 9px;
+      display: grid; place-items: center;
+      border: 1px solid #46609d;
+      background: linear-gradient(145deg, #1b2a51, #111a31);
+      font-size: 13px;
+    }
+    .navlinks { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
+    .navlinks a { color: var(--muted); }
+    .hero { padding: 92px 0 58px; }
+    .eyebrow {
+      display: inline-flex; gap: 8px; align-items: center;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(17,24,45,.8);
+      color: var(--accent-2);
+      font-size: 13px;
+      font-weight: 650;
+    }
+    h1 {
+      max-width: 860px;
+      margin: 22px 0 18px;
+      font-size: clamp(44px, 7vw, 78px);
+      line-height: 1.02;
+      letter-spacing: -.05em;
+    }
+    .lead {
+      max-width: 780px;
+      font-size: clamp(18px, 2.3vw, 23px);
+      color: var(--muted);
+      margin: 0 0 28px;
+    }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 42px;
+      padding: 0 16px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      font-weight: 650;
+      color: var(--text);
+    }
+    .btn.primary { background: #dce6ff; border-color: #dce6ff; color: #10182c; }
+    .stats {
+      margin-top: 42px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .stat, .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(21,31,58,.78), rgba(17,24,45,.82));
+      box-shadow: var(--shadow);
+    }
+    .stat { padding: 18px; }
+    .stat strong { display: block; font-size: 22px; margin-bottom: 3px; }
+    .stat span { color: var(--muted); font-size: 14px; }
+    section { padding: 42px 0; scroll-margin-top: 86px; }
+    .section-head { margin-bottom: 22px; }
+    h2 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -.035em; margin: 0 0 8px; }
+    .section-head p { color: var(--muted); margin: 0; max-width: 800px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .card { padding: 22px; }
+    .card h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.02em; }
+    .card p, .card li { color: var(--muted); }
+    .card ul { padding-left: 20px; margin-bottom: 0; }
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 70px 1fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .flow .box {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 24px;
+      background: var(--panel);
+    }
+    .arrow { display: grid; place-items: center; color: var(--accent); font-size: 28px; }
+    .pill {
+      display: inline-flex;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: rgba(143,179,255,.10);
+      color: var(--accent-2);
+      border: 1px solid rgba(143,179,255,.24);
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+    pre {
+      overflow: auto;
+      padding: 16px;
+      border-radius: 13px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      color: #d9e3ff;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    .timeline { display: grid; gap: 12px; }
+    .release {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 18px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(17,24,45,.72);
+    }
+    .version { font-weight: 800; color: var(--accent-2); }
+    .release h3 { margin: 0 0 5px; font-size: 18px; }
+    .release p { margin: 0; color: var(--muted); }
+    .note {
+      border-left: 3px solid var(--warn);
+      padding: 12px 16px;
+      background: rgba(244,202,122,.06);
+      color: var(--muted);
+      border-radius: 0 10px 10px 0;
+    }
+    details {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 15px 16px;
+      background: rgba(17,24,45,.72);
+    }
+    details + details { margin-top: 10px; }
+    summary { cursor: pointer; font-weight: 700; }
+    details p { color: var(--muted); margin-bottom: 0; }
+    footer {
+      margin-top: 40px;
+      border-top: 1px solid var(--line);
+      padding: 30px 0 48px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    @media (max-width: 820px) {
+      .navlinks { display: none; }
+      .grid-2, .grid-3, .stats, .flow { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); min-height: 38px; }
+      .hero { padding-top: 62px; }
+      .release { grid-template-columns: 1fr; gap: 6px; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="#top"><span class="mark">RDC</span><span>RDC Coding Runtime</span></a>
+      <div class="navlinks">
+        <a href="#model">Model</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#concurrency">Concurrency</a>
+        <a href="#recovery">Recovery</a>
+        <a href="#versions">Versions</a>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap">
+    <section class="hero">
+      <span class="eyebrow">Current version · 0.1.3</span>
+      <h1>A disciplined local coding runtime for ChatGPT + RDC.</h1>
+      <p class="lead">Remote Desktop Commander provides execution. RDC Coding Runtime adds the operating contract: workspace safety, shell discipline, resumable jobs, bounded evidence, validation, and multi-chat concurrency rules.</p>
+      <div class="actions">
+        <a class="btn primary" href="#workflow">Read the workflow</a>
+        <a class="btn" href="https://chatgpt.com/plugins/Plugin_bf03cba046f88191bdc41d04e19869a2">Open the plugin</a>
+        <a class="btn" href="https://github.com/solla-h/rdc-coding-runtime-docs">Source on GitHub</a>
+      </div>
+      <div class="stats">
+        <div class="stat"><strong>Windows-first</strong><span>Designed around an existing local development machine.</span></div>
+        <div class="stat"><strong>PID-resumable</strong><span>Long-running jobs survive chat turns and UI interruptions.</span></div>
+        <div class="stat"><strong>Shared-machine safe</strong><span>Explicit rules for concurrent ChatGPT sessions.</span></div>
+      </div>
+    </section>
+
+    <section id="model">
+      <div class="section-head">
+        <h2>Two layers, one workflow</h2>
+        <p>The runtime intentionally separates transport capability from operating policy.</p>
+      </div>
+      <div class="flow">
+        <div class="box">
+          <span class="pill">Execution transport</span>
+          <h3>Remote Desktop Commander</h3>
+          <p>Filesystem access, terminal execution, process sessions, configuration, and remote machine connectivity.</p>
+        </div>
+        <div class="arrow">→</div>
+        <div class="box">
+          <span class="pill">Runtime contract</span>
+          <h3>RDC Coding Runtime</h3>
+          <p>Rules for workspace ownership, Git safety, PowerShell selection, process recovery, validation, context pressure, and handoff.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="workflow">
+      <div class="section-head">
+        <h2>Operating workflow</h2>
+        <p>Every coding task follows a small number of durable invariants.</p>
+      </div>
+      <div class="grid-3">
+        <div class="card"><h3>1. Bind the workspace</h3><p>Identify the device, repository root, branch, HEAD, remotes, and dirty state before editing.</p></div>
+        <div class="card"><h3>2. Preserve user work</h3><p>Pre-existing changes are user-owned. Never reset, clean, overwrite, or silently absorb them.</p></div>
+        <div class="card"><h3>3. Read before edit</h3><p>Inspect the exact target, make the smallest necessary change, re-read it, then review the diff.</p></div>
+        <div class="card"><h3>4. Validate in layers</h3><p>Start with the cheapest falsifying check. Escalate only when the task warrants broader proof.</p></div>
+        <div class="card"><h3>5. Bound the evidence</h3><p>Keep large logs on the host. Return summaries, failed items, relevant tracebacks, and compact diffs.</p></div>
+        <div class="card"><h3>6. Finish from live state</h3><p>Re-check Git, changed paths, validation, and active processes before declaring completion or handing off.</p></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Windows shell policy</h2>
+        <p>Shell choice is infrastructure state, not conversational memory.</p>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Use the live RDC default</h3>
+          <pre><code>defaultShell = pwsh.exe
+
+# ordinary calls
+start_process(command="...")
+
+# avoid replaying old chat state
+# shell="powershell"</code></pre>
+        </div>
+        <div class="card">
+          <h3>Know the distinction</h3>
+          <ul>
+            <li><code>powershell.exe</code> = Windows PowerShell 5.1</li>
+            <li><code>pwsh.exe</code> = PowerShell 7+</li>
+            <li>Unexpected mojibake or profile behavior → verify live shell facts first.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Long-running jobs</h2>
+        <p>The process is durable evidence. A chat timeout is not proof that the process failed.</p>
+      </div>
+      <div class="grid-3">
+        <div class="card"><h3>&lt; 60 seconds</h3><p>Wait normally. Keep output bounded.</p></div>
+        <div class="card"><h3>~1–3 minutes</h3><p>Observe sparingly. Avoid repeated progress reads.</p></div>
+        <div class="card"><h3>&gt; 3 minutes</h3><p>Launch once, retain PID + command + workspace, report <strong>RUNNING</strong>, then yield the chat turn.</p></div>
+      </div>
+      <div class="note" style="margin-top:16px">
+        Do not restart a long command because the page stopped updating, a tool call timed out, or ChatGPT stream recovery failed. Reconcile the original PID first.
+      </div>
+    </section>
+
+    <section id="concurrency">
+      <div class="section-head">
+        <h2>Concurrent ChatGPT sessions</h2>
+        <p>One RDC device is one shared machine runtime, not a set of per-chat sandboxes.</p>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Shared across chats</h3>
+          <ul>
+            <li>Active process/session registry</li>
+            <li>Recent tool history</li>
+            <li>Filesystem contents</li>
+            <li>Git working trees and index</li>
+            <li>RDC configuration</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>PID-scoped, but ownership matters</h3>
+          <p>stdout/stderr stays with the PID. However, a PID is not automatically “owned” by the chat that sees it in <code>list_sessions</code>.</p>
+          <p>Only interact with a process launched by this chat, or explicitly handed off as <code>PID + command + workspace</code>.</p>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>Shared read cursor</h3>
+        <p>For active processes, <code>read_process_output(offset=0)</code> advances a shared <code>lastReadIndex</code>. With multiple readers, prefer a negative tail offset or an explicit absolute offset.</p>
+        <pre><code># safer for multiple readers
+read_process_output(pid=1234, offset=-80)
+
+# avoid unless there is exactly one reader
+read_process_output(pid=1234, offset=0)</code></pre>
+      </div>
+      <div class="note" style="margin-top:16px">
+        Never let two ChatGPT conversations write concurrently to the same Git working tree. For real parallel coding, use separate Git worktrees or separate checkouts.
+      </div>
+    </section>
+
+    <section id="recovery">
+      <div class="section-head">
+        <h2>Recovery and handoff</h2>
+        <p>Every new conversation should reconcile current machine facts instead of trusting stale chat state.</p>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Recover in this order</h3>
+          <ol>
+            <li>Known PID/session</li>
+            <li>Durable log or test report</li>
+            <li>Git/filesystem effects</li>
+            <li>Remote CI state</li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3>Useful task states</h3>
+          <pre><code>RUNNING
+SUCCEEDED
+FAILED
+UNKNOWN
+BLOCKED
+LOST</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Troubleshooting</h2>
+        <p>Common symptoms and the first discriminating check.</p>
+      </div>
+      <details>
+        <summary>ChatGPT says “stream recovery polling timed out”</summary>
+        <p>This is a ChatGPT Web turn/stream symptom. It does not prove that the Windows process stopped. Reconnect through RDC and inspect the known PID/session once.</p>
+      </details>
+      <details>
+        <summary>A long test is still running after the assistant stopped replying</summary>
+        <p>That is expected. The process is running on the Windows host. Resume using the same PID rather than launching the same command again.</p>
+      </details>
+      <details>
+        <summary>PowerShell output contains mojibake</summary>
+        <p>Verify <code>$PSVersionTable</code>, process executable, <code>$PROFILE</code>, and RDC's live <code>defaultShell</code>. Do not diagnose repository encoding until shell identity is confirmed.</p>
+      </details>
+      <details>
+        <summary>Another chat sees my test PID</summary>
+        <p>RDC session discovery is device-global. Visibility does not imply ownership. Match PID, command, workspace, and handoff evidence before reading or interacting with it.</p>
+      </details>
+    </section>
+
+    <section id="versions">
+      <div class="section-head">
+        <h2>Version history</h2>
+        <p>The plugin evolves from real usage failures and recovery cases.</p>
+      </div>
+      <div class="timeline">
+        <div class="release"><div class="version">0.1.3</div><div><h3>Concurrent RDC session safety</h3><p>PID ownership, device-global tool history awareness, shared read-cursor protection, Git working-tree concurrency rules, and worktree guidance.</p></div></div>
+        <div class="release"><div class="version">0.1.2</div><div><h3>Long-running job protocol</h3><p>Launch once, retain PID, stop active polling, yield the turn, then resume the same process when the user returns.</p></div></div>
+        <div class="release"><div class="version">0.1.1</div><div><h3>Windows shell hardening</h3><p>Use live <code>defaultShell</code> as source of truth, distinguish PowerShell 5.1 from PowerShell 7+, and stop inheriting stale shell arguments.</p></div></div>
+        <div class="release"><div class="version">0.1.0</div><div><h3>Initial runtime contract</h3><p>Workspace safety, Git baseline protection, bounded evidence, validation, recovery, and resumable handoffs.</p></div></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <strong>RDC Coding Runtime</strong> is a policy and workflow layer. Remote Desktop Commander remains the execution transport.
+  </div>
+</footer>
+</body>
+</html>
