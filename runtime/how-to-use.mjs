@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import {
+  buildContextSnapshot,
+  discoverSkillRecords,
+  likelySkills,
+  renderContextMarkdown,
+} from "./lib/capabilities.mjs";
 
 const HOME = os.homedir();
 const ROOT = path.join(HOME, ".rdc", "how-to-use");
@@ -14,11 +20,7 @@ const MODELS_PATH = path.join(AGENT_DIR, "models.json");
 const SETTINGS_PATH = path.join(AGENT_DIR, "settings.json");
 const STATE_PATH = path.join(ROOT, "backend-state.json");
 const BOOTSTRAP = path.join(ROOT, "bootstrap-router.mjs");
-const MAX_SKILLS = 180;
 const PLACEHOLDER = "REPLACE_WITH_";
-const GENERIC_SKILL_TOKENS = new Set([
-  "agent", "skill", "tool", "local", "code", "claude", "git", "github", "chatgpt"
-]);
 
 function readText(p, max = 20000) {
   try { return fs.readFileSync(p, "utf8").slice(0, max); } catch { return ""; }
@@ -32,78 +34,19 @@ function writeJson(p, value) {
 function isPlaceholder(v) {
   return typeof v !== "string" || !v || v.includes(PLACEHOLDER);
 }
-function firstDescription(text) {
-  const head = text.slice(0, 5000);
-  const name = head.match(/^name:\s*["']?([^\r\n"']+)/m)?.[1]?.trim();
-  const raw = head.match(/^description:\s*(.+)$/m)?.[1]?.trim() || "";
-  return { name, description: raw.replace(/^["']|["']$/g, "").slice(0, 700) };
-}
-function walkSkills(root, depth = 0, out = []) {
-  if (depth > 7 || out.length >= MAX_SKILLS || !fs.existsSync(root)) return out;
-  let entries = [];
-  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
-  if (entries.some(e => e.isFile() && e.name === "SKILL.md")) {
-    const skillPath = path.join(root, "SKILL.md");
-    const meta = firstDescription(readText(skillPath, 5000));
-    if (meta.name) out.push({ ...meta, path: skillPath });
-    return out;
-  }
-  for (const e of entries) {
-    const child = path.join(root, e.name);
-    let isDir = e.isDirectory();
-    if (!isDir && e.isSymbolicLink()) {
-      try { isDir = fs.statSync(child).isDirectory(); } catch { isDir = false; }
-    }
-    if (!isDir || ["node_modules", ".git", "data", "sessions"].includes(e.name)) continue;
-    walkSkills(child, depth + 1, out);
-    if (out.length >= MAX_SKILLS) break;
-  }
-  return out;
-}
 function skillCatalog() {
-  const roots = [
-    path.join(HOME, ".agents", "skills"),
-    path.join(HOME, ".pi", "agent", "skills"),
-    path.join(HOME, ".codex", "plugins", "cache"),
-  ];
-  const all = [];
-  for (const root of roots) walkSkills(root, 0, all);
-  const seen = new Set();
-  return all.filter(s => !seen.has(s.name) && seen.add(s.name));
-}
-function normalizedWords(value) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return discoverSkillRecords({ home: HOME }).records.map(record => ({
+    ...record,
+    description: record.summary,
+    path: record.details.skillPath,
+  }));
 }
 
-function hasSkillPhrase(task, skillName) {
-  const taskWords = " " + normalizedWords(task) + " ";
-  const skillWords = " " + normalizedWords(skillName) + " ";
-  return skillWords.trim().length > 0 && taskWords.includes(skillWords);
+function findUniqueSkillByName(skills, name) {
+  const matches = skills.filter(skill => skill.name.toLowerCase() === String(name).toLowerCase());
+  return matches.length === 1 ? matches[0] : null;
 }
-
-function likelySkills(task, skills) {
-  const lower = task.toLowerCase();
-  const tokens = new Set(lower.match(/[a-z0-9]{3,}/g) || []);
-  const ranked = skills.map(skill => {
-    const parts = skill.name.toLowerCase().split(/[-_]/)
-      .filter(p => p.length >= 3 && !GENERIC_SKILL_TOKENS.has(p));
-    const nameMatches = parts.filter(p => tokens.has(p)).length;
-    const desc = (skill.description || "").toLowerCase();
-    let descMatches = 0;
-    for (const token of tokens) if (desc.includes(token)) descMatches++;
-    const phraseMatch = hasSkillPhrase(task, skill.name);
-    return { skill, nameMatches, phraseMatch, score: nameMatches * 10 + descMatches + (phraseMatch ? 20 : 0) };
-  }).sort((a,b) => b.score - a.score);
-  const [top] = ranked;
-  if (!top || top.score === 0) return [];
-  const topParts = top.skill.name.toLowerCase().split(/[-_]/)
-    .filter(p => p.length >= 3 && !GENERIC_SKILL_TOKENS.has(p));
-  if (top.phraseMatch) return [top.skill];
-  if (topParts.length === 1 && top.nameMatches === 1) return [top.skill];
-  if (top.nameMatches >= 2) return [top.skill];
-  return [];
-}
-function configInfo() {
+function configInfo({ syncDerived = false } = {}) {
   const cfg = readJson(CONFIG_PATH);
   if (!cfg) throw new Error("config.json missing; run how-to-use --bootstrap");
   if (!["anthropic-messages", "openai-completions"].includes(cfg.api)) {
@@ -127,16 +70,19 @@ function configInfo() {
       input: ["text"]
     }]
   };
-  writeJson(MODELS_PATH, { providers: { "rdc-router": provider } });
-  writeJson(SETTINGS_PATH, {
-    defaultProvider: "rdc-router",
-    defaultModel: cfg.model,
-    defaultThinkingLevel: cfg.thinking,
-    defaultTools: ["read","grep","find","ls"],
-    defaultProjectTrust: "never",
-    quietStartup: true,
-    skills: ["~/.pi/agent/skills"]
-  });
+  if (syncDerived) {
+    fs.mkdirSync(AGENT_DIR, { recursive: true });
+    writeJson(MODELS_PATH, { providers: { "rdc-router": provider } });
+    writeJson(SETTINGS_PATH, {
+      defaultProvider: "rdc-router",
+      defaultModel: cfg.model,
+      defaultThinkingLevel: cfg.thinking,
+      defaultTools: ["read","grep","find","ls"],
+      defaultProjectTrust: "never",
+      quietStartup: true,
+      skills: ["~/.pi/agent/skills"]
+    });
+  }
   return { provider, model: provider.models[0], thinking: cfg.thinking };
 }
 function findPiPs1() {
@@ -210,7 +156,7 @@ async function thinLlm(prompt, maxTokens = 1200) {
   return extractOpenAI(data);
 }
 async function verifyConfig() {
-  const { provider, model, thinking } = configInfo();
+  const { provider, model, thinking } = configInfo({ syncDerived: true });
   console.log("config=valid");
   console.log("provider=rdc-router");
   console.log("api=" + provider.api);
@@ -257,7 +203,7 @@ function benchmark() {
   const basic = piRun("Reply with exactly ROUTER_OK", { noTools:true, noSkills:true, timeout:65000 });
   passLine("basic_inference", basic.ok && basic.output.includes("ROUTER_OK"), basic.ms);
 
-  const lark = skills.find(s => s.name === "lark-base");
+  const lark = findUniqueSkillByName(skills, "lark-base");
   if (lark) {
     const route = piRun(
       "Which installed local Skill should be used for Feishu/Lark Base or 多维表格 record operations? Reply with only the exact Skill name.",
@@ -295,6 +241,7 @@ function safeCliHelp(name) {
     ((run.stdout || "") + "\n" + (run.stderr || "")).trim()).slice(0,14000);
 }
 function skillRequiredCli(skill) {
+  if (skill.details?.bins?.length) return skill.details.bins[0];
   const text = readText(skill.path, 6000);
   return text.match(/bins:\s*\[\s*["']?([A-Za-z0-9_.-]+)/i)?.[1] || null;
 }
@@ -310,10 +257,11 @@ function routePrompt(task, context, skills) {
     "You are a local capability router. Use only the local evidence below.",
     "Treat task constraints such as read-only, no install, no download, no network, and no mutation as hard requirements.",
     "Choose at most one CLI and three Skills. Do not invent capabilities.",
+    "If multiple Skill entries share one display name, do not choose that name without disambiguating evidence.",
     "Prefer stable user-level capabilities over private dependencies embedded inside another application's package tree.",
     "Return exactly: CLI, SKILLS, WHY.",
     "", "TASK:", task, "", "MACHINE_CONTEXT:", context || "(missing)", "",
-    "LOCAL_SKILLS:", skills.map(s => "- " + s.name + ": " + s.description).join("\n")
+    "LOCAL_SKILLS:", skills.map(s => "- " + s.name + " [" + s.id + "]: " + s.description).join("\n")
   ].join("\n");
 }
 function finalPrompt(task, route, evidence) {
@@ -344,8 +292,12 @@ async function thinAdvisor(task, context, skills, autoSkills) {
   const evidence = [];
   if (picked.cli) evidence.push("CLI " + picked.cli + "\n" + safeCliHelp(picked.cli));
   for (const name of picked.skills) {
-    const found = skills.find(s => s.name === name);
-    if (found) evidence.push("Skill " + name + " at " + found.path + "\n" + readText(found.path,18000));
+    const found = findUniqueSkillByName(skills, name);
+    if (found) {
+      evidence.push("Skill " + name + " at " + found.path + "\n" + readText(found.path,18000));
+    } else if (skills.some(skill => skill.name.toLowerCase() === name.toLowerCase())) {
+      evidence.push("Skill " + name + " is ambiguous across multiple local sources; use rdc-cap find/describe to disambiguate.");
+    }
   }
   return await thinLlm(finalPrompt(task, routeText, evidence), 1600);
 }
@@ -393,6 +345,14 @@ function selfCheck() {
   console.log("shared_pi_skills=" + fs.existsSync(path.join(HOME,".pi","agent","skills")));
   console.log("shared_agent_skills=" + fs.existsSync(path.join(HOME,".agents","skills")));
 }
+
+function requiresDeterministicDiscovery(task) {
+  const text = String(task || "");
+  const lower = text.toLowerCase();
+  return /\b(read[- ]?only|readonly|no[- ]?network|offline|no[- ]?mutation|do not modify|don't modify|without modifying)\b/.test(lower) ||
+    /(只读|不要修改|禁止修改|不得修改|不要联网|禁止联网|不得联网|不联网|离线)/.test(text);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes("--bootstrap")) return runBootstrap(false);
@@ -409,6 +369,16 @@ async function main() {
   }
 
   const requestStart = performance.now();
+  if (requiresDeterministicDiscovery(task)) {
+    const snapshot = buildContextSnapshot({ home: HOME, query: task });
+    const selectedSkill = snapshot.capabilities.find(item => item.kind === "skill")?.name || "none";
+    console.log(renderContextMarkdown(snapshot));
+    console.error("[how-to-use] backend=deterministic model=none thinking=none" +
+      " preselected_skill=" + selectedSkill +
+      " elapsed_ms=" + Math.round(performance.now() - requestStart));
+    return;
+  }
+
   const state = readJson(STATE_PATH, {});
   if (!state.validated) throw new Error("Router model is not validated; run how-to-use --verify-config");
   const context = readText(MACHINE_CONTEXT, 12000);
