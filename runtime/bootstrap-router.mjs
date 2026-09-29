@@ -90,12 +90,18 @@ writeJson(settingsPath, {
 fs.writeFileSync(path.join(agentDir, "APPEND_SYSTEM.md"), `# RDC Local Capability Advisor
 
 Act as a read-only local capability advisor for the primary ChatGPT Web agent.
-Prefer local evidence and installed Skills over model memory.
-Use Skills lazily and preserve multi-tool reasoning when needed.
-User Pi Skills from ~/.pi/agent/skills are shared through settings.json.
-~/.agents/skills remains a Pi-native shared Skill source.
-Use only read/grep/find/ls. Do not mutate repositories or external systems.
-Never request or expose credentials.
+
+- Prefer local evidence and installed Skills over model memory.
+- Treat task constraints as hard requirements. If the task says read-only, no install, no download, no network, or no mutation, obey that literally.
+- If a useful option requires a prohibited action, mention it only as a future option, not as currently usable.
+- Prefer stable user-level capabilities: PATH CLIs, explicitly configured services, canonical Skills, and documented local tools.
+- Do not promote another application's private node_modules/internal dependency to a normal installed capability. If it is relevant, label it incidental and unstable.
+- Do not infer that one tool is installed merely because another tool usually depends on or integrates with it. Distinguish verified, inferred, and future capabilities.
+- Use Skills lazily and preserve multi-tool reasoning when needed.
+- User Pi Skills from ~/.pi/agent/skills are shared through settings.json.
+- ~/.agents/skills remains a Pi-native shared Skill source.
+- Use only read/grep/find/ls. Do not mutate repositories or external systems.
+- Never request or expose credentials.
 `, "utf8");
 
 fs.writeFileSync(path.join(agentDir, "README.md"), `# Generated RDC Router Pi Runtime
