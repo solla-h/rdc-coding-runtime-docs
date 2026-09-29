@@ -291,7 +291,9 @@ function parseRoute(text) {
 function routePrompt(task, context, skills) {
   return [
     "You are a local capability router. Use only the local evidence below.",
+    "Treat task constraints such as read-only, no install, no download, no network, and no mutation as hard requirements.",
     "Choose at most one CLI and three Skills. Do not invent capabilities.",
+    "Prefer stable user-level capabilities over private dependencies embedded inside another application's package tree.",
     "Return exactly: CLI, SKILLS, WHY.",
     "", "TASK:", task, "", "MACHINE_CONTEXT:", context || "(missing)", "",
     "LOCAL_SKILLS:", skills.map(s => "- " + s.name + ": " + s.description).join("\n")
@@ -301,6 +303,10 @@ function finalPrompt(task, route, evidence) {
   return [
     "You advise the primary ChatGPT Web agent how to use local capabilities.",
     "Ground the answer in LOCAL EVIDENCE. Preserve multi-tool reasoning when needed.",
+    "Treat every task constraint as hard: read-only, no install, no network, no mutation, or similar constraints must be obeyed.",
+    "If a useful option would require a prohibited install/download/network action, label it only as a future option, not as currently usable.",
+    "Prefer stable user-level capabilities: PATH CLIs, explicitly configured services, canonical Skills, and documented local tools.",
+    "Do not treat another application's private node_modules/internal dependency as a normal installed capability. If mentioned at all, label it incidental and unstable.",
     "Do not perform mutations and do not request credentials.",
     "Return concise Markdown: Recommended capability, How, Verify first, Local evidence.",
     "", "TASK:", task, "", "ROUTER:", route, "", "LOCAL EVIDENCE:",
@@ -331,9 +337,14 @@ function piAdvisor(task, autoSkills) {
     "Task capsule from the primary ChatGPT Web agent:",
     task, "",
     "Determine the best local capability and explain how the primary agent should use it.",
+    "Treat all constraints in the task capsule as hard requirements.",
+    "If the task says no install/download/network/mutation, do not recommend a path that requires that action as currently usable.",
+    "Prefer stable user-level capabilities: PATH CLIs, configured services, canonical Skills, and documented local tools.",
+    "Do not promote private dependencies found inside another application's node_modules or internal package tree to normal installed capabilities.",
+    "Do not infer that tool B is installed merely because tool A often depends on or integrates with it. Distinguish verified, inferred, and future capabilities; only call something installed when local evidence verifies it.",
     "Use local Skills and evidence. Do not perform the user's mutation."
   ].join("\n");
-  const opts = { timeout:65000 };
+  const opts = { timeout:90000 };
   if (autoSkills.length) {
     opts.skillPath = path.dirname(autoSkills[0].path);
     prompt += "\n\nA high-confidence Skill match is " + autoSkills[0].name +
@@ -380,17 +391,33 @@ async function main() {
     process.exit(2);
   }
 
+  const requestStart = performance.now();
   const state = readJson(STATE_PATH, {});
   if (!state.validated) throw new Error("Router model is not validated; run how-to-use --verify-config");
   const context = readText(MACHINE_CONTEXT, 12000);
   const skills = skillCatalog();
   const autoSkills = likelySkills(task, skills);
+  const { model, thinking } = configInfo();
+  const selectedSkill = autoSkills[0]?.name || "none";
 
   if (state.preferredBackend === "pi") {
     const reply = piAdvisor(task, autoSkills);
-    if (reply) { console.log(reply); return; }
+    if (reply) {
+      console.log(reply);
+      console.error("[how-to-use] backend=pi model=" + model.id +
+        " thinking=" + thinking +
+        " preselected_skill=" + selectedSkill +
+        " elapsed_ms=" + Math.round(performance.now() - requestStart));
+      return;
+    }
   }
-  console.log(await thinAdvisor(task, context, skills, autoSkills));
+
+  const thinReply = await thinAdvisor(task, context, skills, autoSkills);
+  console.log(thinReply);
+  console.error("[how-to-use] backend=thin model=" + model.id +
+    " thinking=" + thinking +
+    " preselected_skill=" + selectedSkill +
+    " elapsed_ms=" + Math.round(performance.now() - requestStart));
 }
 
 main().catch(err => {
