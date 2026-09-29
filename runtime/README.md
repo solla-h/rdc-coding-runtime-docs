@@ -81,3 +81,22 @@ schema_reasoning=PASS 2681ms
 ```
 
 A real read-only Feishu/Lark Base task selected the installed `lark-base` Skill and returned the evidence-backed `+url-resolve -> +record-list` path.
+
+
+## Advisor guardrails
+
+The primary ChatGPT agent should launch one `how-to-use` request and keep ownership of that PID. A normal advisor request can be silent for tens of seconds; do not kill or duplicate it merely because output has not appeared yet. The current advisor path allows roughly 90 seconds for Pi reasoning before treating it as a timeout.
+
+While an advisor request is running, do not start a second broad inventory of PATH tools, npm globals, Skill roots, home directories, or package trees. Wait for the advisor result, then perform only targeted live verification of claims that matter to the decision.
+
+The router treats task constraints such as read-only, no-install, no-download, no-network, and no-mutation as hard requirements. Options that require a prohibited action must be labeled as future options instead of currently usable paths.
+
+Stable user-level capabilities are preferred over private dependencies embedded inside another application's package tree. The router also distinguishes verified capabilities from inferred or future ones and avoids inferring one installed tool merely from the presence of another.
+
+A normal successful request emits bounded runtime metadata, for example:
+
+```text
+[how-to-use] backend=pi model=claude-sonnet-4-6 thinking=xhigh preselected_skill=none elapsed_ms=14530
+```
+
+Skill preselection is intentionally conservative: multi-token Skill names require a phrase match or at least two distinctive non-generic name tokens. Generic terms such as `git`, `code`, `claude`, `agent`, `skill`, and `tool` do not by themselves justify preselection.
