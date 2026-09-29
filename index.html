@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <title>RDC Coding Runtime</title>
-  <meta name="description" content="A disciplined local coding runtime for ChatGPT + Remote Desktop Commander." />
+  <meta name="description" content="A machine-aware local coding runtime for ChatGPT + Remote Desktop Commander with durable context, local capability routing, bootstrap, recovery, and validation." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -744,11 +744,12 @@
       </a>
 
       <div class="nav-right">
-        <span class="version">v0.1.4</span>
+        <span class="version">v0.4.0</span>
         <nav class="navlinks" aria-label="Page sections">
           <a href="#workflow">Workflow</a>
+          <a href="#advisor">Local advisor</a>
+          <a href="#bootstrap">Bootstrap</a>
           <a href="#jobs">Jobs</a>
-          <a href="#concurrency">Concurrency</a>
           <a href="#recovery">Recovery</a>
           <a href="#versions">Versions</a>
         </nav>
@@ -760,8 +761,8 @@
     <section class="hero" id="top">
       <div class="wrap hero-grid">
         <div>
-          <h1>A disciplined local coding runtime for ChatGPT + RDC.</h1>
-          <p class="lead">Remote Desktop Commander provides execution. RDC Coding Runtime adds the operating contract: workspace safety, shell discipline, resumable jobs, bounded evidence, validation, and multi-chat concurrency rules.</p>
+          <h1>A disciplined local coding runtime that knows the machine it is using.</h1>
+          <p class="lead">Remote Desktop Commander provides execution. RDC Coding Runtime adds durable machine context, workspace safety, local capability routing, dedicated first-run bootstrap, resumable jobs, bounded evidence, validation, and multi-chat concurrency rules.</p>
 
           <div class="actions">
             <a class="button primary" href="#workflow">Read the operating contract</a>
@@ -771,27 +772,32 @@
 
           <div class="meta-line" aria-label="Runtime characteristics">
             <span>Windows-first</span>
+            <span>Machine-context aware</span>
+            <span>Skill-lazy</span>
             <span>PID-resumable</span>
-            <span>Shared-machine aware</span>
           </div>
         </div>
 
         <div class="runtime" aria-label="Runtime architecture">
           <div class="runtime-row">
             <div class="runtime-name">ChatGPT conversation</div>
-            <div class="runtime-role">Plans, reasons, edits, validates, and keeps task intent.</div>
+            <div class="runtime-role">Owns task intent, reasoning, decisions, edits, validation, and every effectful action.</div>
           </div>
           <div class="runtime-row">
             <div class="runtime-name">RDC Coding Runtime</div>
-            <div class="runtime-role">Defines the safety and recovery contract for the work.</div>
+            <div class="runtime-role">Supplies the workspace, machine-context, bootstrap, recovery, and concurrency contract.</div>
+          </div>
+          <div class="runtime-row">
+            <div class="runtime-name">how-to-use advisor</div>
+            <div class="runtime-role">Uses an isolated Pi runtime and shared local Skills to answer “what can this machine do, and how?” without performing the mutation.</div>
           </div>
           <div class="runtime-row">
             <div class="runtime-name">Remote Desktop Commander</div>
-            <div class="runtime-role">Carries filesystem, terminal, process, and configuration operations.</div>
+            <div class="runtime-role">Carries filesystem, terminal, process, and configuration operations to the selected host.</div>
           </div>
           <div class="runtime-row">
             <div class="runtime-name">Windows development host</div>
-            <div class="runtime-role">Holds the real repository, processes, Git state, and durable evidence.</div>
+            <div class="runtime-role">Holds the repository, CLIs, local authentication, Skills, processes, Git state, and durable evidence.</div>
           </div>
         </div>
       </div>
@@ -826,8 +832,89 @@
             <p>Keep large logs on the host. Bring back exit state, failed items, relevant traceback windows, and compact diffs.</p>
           </div>
           <div class="contract-row">
+            <strong class="contract-title">Route locally, execute centrally</strong>
+            <p>When local capability choice is unclear, ask the read-only <code>how-to-use</code> advisor. ChatGPT remains responsible for the decision and performs the real action through RDC.</p>
+          </div>
+          <div class="contract-row">
             <strong class="contract-title">Finish from live facts</strong>
             <p>Re-check Git state, changed paths, validation, and active processes before declaring completion or writing a handoff.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="advisor">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Local capability routing without loading the whole machine into context</h2>
+          <p><code>MACHINE_CONTEXT.md</code> stays concise. Detailed CLI, Skill, and provider knowledge is loaded only when the current task actually needs it.</p>
+        </div>
+
+        <div class="split">
+          <div class="copy">
+            <h3>Machine hints stay small; local evidence stays local</h3>
+            <ul>
+              <li><code>~/.rdc/MACHINE_CONTEXT.md</code> records durable host facts and capability hints, not full manuals or schemas.</li>
+              <li><code>how-to-use</code> receives a bounded task capsule and asks an isolated local Pi runtime which capability fits.</li>
+              <li>User Pi Skills are referenced from <code>~/.pi/agent/skills</code>; Pi's shared <code>~/.agents/skills</code> source remains available without copying Skill bodies.</li>
+              <li>The advisor is read-only. The primary ChatGPT agent keeps control of every repository edit, deployment, Git operation, or external mutation.</li>
+            </ul>
+          </div>
+
+          <pre aria-label="Local capability routing flow"><code>ChatGPT Web
+    |
+    | bounded task capsule
+    v
+how-to-use
+    |
+    v
+isolated Pi router
+    |
+    +-- shared Skill metadata
+    +-- local Skill bodies, lazily
+    +-- machine context
+    |
+    v
+capability guidance
+    |
+    v
+ChatGPT decides
+    |
+    v
+RDC executes</code></pre>
+        </div>
+
+        <div class="notice">
+          <strong>The router is advisory, not autonomous.</strong> It exists to resolve local capability uncertainty without turning a second coding Agent loose on the machine.
+        </div>
+      </div>
+    </section>
+
+    <section id="bootstrap">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>First run is a bootstrap, not a manual installation guide</h2>
+          <p>The bootstrap Skill installs the local advisor runtime, opens one configuration file for the user, validates the chosen model, then records a healthy runtime state.</p>
+        </div>
+
+        <div class="split">
+          <pre aria-label="Router configuration example"><code>{
+  "api": "anthropic-messages",
+  "baseUrl": "https://api.example.com",
+  "apiKey": "replace-with-your-api-key",
+  "model": "claude-sonnet-4-6",
+  "thinking": "medium"
+}</code></pre>
+
+          <div class="copy">
+            <h3>One user-edited file</h3>
+            <ol>
+              <li>Bootstrap installs the versioned <code>how-to-use</code> runtime under <code>~/.rdc/how-to-use</code>.</li>
+              <li>It opens <code>config.json</code> in the local editor. The user fills in API protocol, Base URL, API key, model ID, and thinking level.</li>
+              <li><code>how-to-use --verify-config</code> performs a real inference check.</li>
+              <li><code>how-to-use --benchmark</code> verifies basic inference, Skill routing, and multi-tool/schema reasoning.</li>
+            </ol>
+            <p><code>pi-agent/models.json</code> and <code>settings.json</code> are generated runtime files. The user-facing source of truth remains <code>~/.rdc/how-to-use/config.json</code>.</p>
           </div>
         </div>
       </div>
@@ -981,6 +1068,16 @@ LOST</code>
 
         <div class="faq">
           <details>
+            <summary>Why does <code>pi-agent/models.json</code> not show my thinking level?</summary>
+            <p><code>~/.rdc/how-to-use/config.json</code> is the user configuration source. The runtime generates <code>models.json</code> for provider/model metadata and writes the selected thinking level to <code>pi-agent/settings.json</code> and the Pi invocation.</p>
+          </details>
+
+          <details>
+            <summary>Why is <code>pi-agent/auth.json</code> just <code>{}</code>?</summary>
+            <p>That is normal for a custom router provider whose API key comes from the generated <code>models.json</code>. <code>auth.json</code> is Pi's isolated login store and can remain empty when no Pi-native login flow is used.</p>
+          </details>
+
+          <details>
             <summary>ChatGPT says “stream recovery polling timed out”</summary>
             <p>This is a ChatGPT Web turn/stream symptom. It does not prove the Windows process stopped. Reconnect through RDC and inspect the known PID or session once.</p>
           </details>
@@ -1011,6 +1108,26 @@ LOST</code>
         </div>
 
         <div class="timeline">
+          <div class="release">
+            <div class="release-tag">0.4.0</div>
+            <strong class="release-title">Bootstrap + dedicated local capability router</strong>
+            <p>Adds the first-run bootstrap Skill, versioned local advisor installation, isolated Pi router configuration, shared Skill sources, explicit model/thinking configuration, and runtime verification/benchmarking.</p>
+          </div>
+          <div class="release">
+            <div class="release-tag">0.3.1</div>
+            <strong class="release-title">Single router configuration source</strong>
+            <p><code>config.json</code> becomes the user-facing source of truth for API protocol, Base URL, API key, model, and thinking level. Pi remains primary with a thin compatibility fallback.</p>
+          </div>
+          <div class="release">
+            <div class="release-tag">0.3.0</div>
+            <strong class="release-title">how-to-use local capability advisor</strong>
+            <p>Adds bounded local capability routing with machine context, lazy Skill discovery, isolated local reasoning, and primary-Agent execution control.</p>
+          </div>
+          <div class="release">
+            <div class="release-tag">0.2.0</div>
+            <strong class="release-title">Durable machine context</strong>
+            <p>Adds <code>~/.rdc/MACHINE_CONTEXT.md</code> bootstrap/refresh rules so host-specific capability knowledge persists without becoming a giant tool inventory.</p>
+          </div>
           <div class="release">
             <div class="release-tag">0.1.4</div>
             <strong class="release-title">Documentation link</strong>
@@ -1043,7 +1160,7 @@ LOST</code>
 
   <footer>
     <div class="wrap footer-row">
-      <span><strong>RDC Coding Runtime</strong> is the policy and workflow layer.</span>
+      <span><strong>RDC Coding Runtime</strong> is the policy, machine-context, capability-routing, and workflow layer.</span>
       <span>Remote Desktop Commander remains the execution transport.</span>
     </div>
   </footer>
