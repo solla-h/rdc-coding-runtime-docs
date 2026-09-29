@@ -16,6 +16,9 @@ const STATE_PATH = path.join(ROOT, "backend-state.json");
 const BOOTSTRAP = path.join(ROOT, "bootstrap-router.mjs");
 const MAX_SKILLS = 180;
 const PLACEHOLDER = "REPLACE_WITH_";
+const GENERIC_SKILL_TOKENS = new Set([
+  "agent", "skill", "tool", "local", "code", "claude", "git", "github", "chatgpt"
+]);
 
 function readText(p, max = 20000) {
   try { return fs.readFileSync(p, "utf8").slice(0, max); } catch { return ""; }
@@ -68,22 +71,36 @@ function skillCatalog() {
   const seen = new Set();
   return all.filter(s => !seen.has(s.name) && seen.add(s.name));
 }
+function normalizedWords(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function hasSkillPhrase(task, skillName) {
+  const taskWords = " " + normalizedWords(task) + " ";
+  const skillWords = " " + normalizedWords(skillName) + " ";
+  return skillWords.trim().length > 0 && taskWords.includes(skillWords);
+}
+
 function likelySkills(task, skills) {
   const lower = task.toLowerCase();
   const tokens = new Set(lower.match(/[a-z0-9]{3,}/g) || []);
   const ranked = skills.map(skill => {
-    const parts = skill.name.toLowerCase().split(/[-_]/).filter(p => p.length >= 3);
+    const parts = skill.name.toLowerCase().split(/[-_]/)
+      .filter(p => p.length >= 3 && !GENERIC_SKILL_TOKENS.has(p));
     const nameMatches = parts.filter(p => tokens.has(p)).length;
     const desc = (skill.description || "").toLowerCase();
     let descMatches = 0;
     for (const token of tokens) if (desc.includes(token)) descMatches++;
-    return { skill, nameMatches, score: nameMatches * 10 + descMatches + (lower.includes(skill.name.toLowerCase()) ? 20 : 0) };
+    const phraseMatch = hasSkillPhrase(task, skill.name);
+    return { skill, nameMatches, phraseMatch, score: nameMatches * 10 + descMatches + (phraseMatch ? 20 : 0) };
   }).sort((a,b) => b.score - a.score);
-  const [top, second] = ranked;
+  const [top] = ranked;
   if (!top || top.score === 0) return [];
+  const topParts = top.skill.name.toLowerCase().split(/[-_]/)
+    .filter(p => p.length >= 3 && !GENERIC_SKILL_TOKENS.has(p));
+  if (top.phraseMatch) return [top.skill];
+  if (topParts.length === 1 && top.nameMatches === 1) return [top.skill];
   if (top.nameMatches >= 2) return [top.skill];
-  if (top.nameMatches >= 1 && (!second || top.nameMatches > second.nameMatches)) return [top.skill];
-  if (!second || top.score >= second.score + 4) return [top.skill];
   return [];
 }
 function configInfo() {
