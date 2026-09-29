@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 export const CAPABILITY_SCHEMA_VERSION = 1;
-export const CAPABILITY_RUNTIME_VERSION = "0.5.0";
+export const CAPABILITY_RUNTIME_VERSION = "0.5.1";
 export const DEFAULT_MAX_CONTEXT_BYTES = 12 * 1024;
 export const DEFAULT_MAX_CONTEXT_ITEMS = 12;
 const DEFAULT_MAX_SKILLS = 180;
@@ -15,6 +15,15 @@ const MAX_PROJECT_EVIDENCE = 16;
 const SKIP_DIRS = new Set(["node_modules", ".git", "data", "sessions"]);
 const GENERIC_SKILL_TOKENS = new Set([
   "agent", "skill", "tool", "local", "code", "claude", "git", "github", "chatgpt",
+]);
+const QUERY_MATCH_MIN_SCORE = 8;
+const QUERY_STOP_TOKENS = new Set([
+  "the", "and", "for", "with", "without", "from", "into", "this", "that", "these", "those",
+  "use", "using", "do", "does", "did", "not", "no", "yes", "is", "are", "was", "were", "be",
+  "my", "your", "our", "their", "it", "its", "when", "where", "which", "what", "how", "whether",
+  "anything", "something", "please", "determine", "check", "installed", "install", "modify",
+  "read-only", "readonly", "no-network", "offline", "no-mutation",
+  "local", "machine", "capability", "capabilities", "tool", "tools", "skill", "skills",
 ]);
 const COMMON_COMMANDS = new Map([
   ["git", "Git version control CLI"],
@@ -467,6 +476,21 @@ function queryTerms(value) {
   return normalized.match(/[\p{L}\p{N}_.-]{2,}/gu) || [];
 }
 
+function relevantQueryTerms(value) {
+  return queryTerms(value).filter(term => term.length >= 3 && !QUERY_STOP_TOKENS.has(term));
+}
+
+function nameTokens(value) {
+  const normalized = String(value || "").normalize("NFKC").toLowerCase();
+  return normalized.match(/[\p{L}\p{N}]{2,}/gu) || [];
+}
+
+function summaryTermIncludes(summary, term) {
+  return /^[\x00-\x7F]+$/.test(term)
+    ? exactWordIncludes(summary, term)
+    : summary.includes(term);
+}
+
 function exactWordIncludes(haystack, needle) {
   if (!needle) return false;
   const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -476,19 +500,18 @@ function exactWordIncludes(haystack, needle) {
 export function rankCapabilities(query, records) {
   const q = String(query || "").normalize("NFKC").toLowerCase().trim();
   if (!q) return records.map((record, index) => ({ record, score: 0, index }));
-  const terms = [...new Set(queryTerms(q))];
+  const terms = [...new Set(relevantQueryTerms(q))];
   return records.map((record, index) => {
     const name = record.name.toLowerCase();
     const summary = record.summary.toLowerCase();
+    const nameParts = new Set(nameTokens(name));
     let score = 0;
     if (name === q) score += 100;
     if (q.includes(name) && name.length >= 3) score += 45;
     if (summary.includes(q) && q.length >= 3) score += 30;
     for (const term of terms) {
-      if (term.length < 3) continue;
-      if (exactWordIncludes(name, term)) score += 16;
-      else if (name.includes(term)) score += 7;
-      if (summary.includes(term)) score += 3;
+      if (nameParts.has(term)) score += 16;
+      if (summaryTermIncludes(summary, term)) score += 4;
     }
     return { record, score, index };
   }).sort((a, b) => b.score - a.score || a.record.name.localeCompare(b.record.name) || a.index - b.index);
@@ -528,13 +551,31 @@ export function likelySkills(task, skillRecords) {
 function extractExplicitCommandCandidates(query) {
   const q = String(query || "");
   const values = new Set();
+  const addNaturalCandidate = (value) => {
+    const candidate = String(value || "").toLowerCase();
+    if (!/^[a-z][a-z0-9_.-]{1,63}$/.test(candidate)) return;
+    if (QUERY_STOP_TOKENS.has(candidate)) return;
+    values.add(candidate);
+  };
+
   const trimmed = q.trim();
   if (/^[A-Za-z0-9_.-]{2,64}$/.test(trimmed)) values.add(trimmed);
   for (const match of q.matchAll(/`([A-Za-z0-9_.-]{2,64})`/g)) values.add(match[1]);
+
+  const naturalPatterns = [
+    /\b(?:whether|use|using|run|have|has)\s+([A-Za-z][A-Za-z0-9_.-]{1,63})\b/gi,
+    /\b(?:is|check|find)\s+([A-Za-z][A-Za-z0-9_.-]{1,63})\s+(?:installed|available|present)\b/gi,
+    /\b([A-Za-z][A-Za-z0-9_.-]{1,63})\s+(?:is\s+)?(?:installed|available|present)\b/gi,
+    /\b(?:cli|command|tool)\s+`?([A-Za-z][A-Za-z0-9_.-]{1,63})`?/gi,
+  ];
+  for (const pattern of naturalPatterns) {
+    for (const match of q.matchAll(pattern)) addNaturalCandidate(match[1]);
+  }
+
   for (const name of COMMON_COMMANDS.keys()) {
     if (exactWordIncludes(q.toLowerCase(), name.toLowerCase())) values.add(name);
   }
-  return [...values];
+  return [...values].slice(0, 8);
 }
 
 function defaultCommandResolver(name) {
@@ -568,7 +609,7 @@ export function discoverExactCommandRecords({
 } = {}) {
   const candidates = new Set(extractExplicitCommandCandidates(query));
   if (query) {
-    for (const skill of rankCapabilities(query, skillRecords).slice(0, 6).map(item => item.record)) {
+    for (const skill of likelySkills(query, skillRecords)) {
       for (const bin of skill.details?.bins || []) candidates.add(bin);
     }
   }
@@ -739,11 +780,13 @@ export function buildContextSnapshot({
 } = {}) {
   const discovered = discoverCapabilityRecords({ home, workspace, query, skillRoots, resolver, now });
   const ranked = rankCapabilities(query, discovered.records);
-  const selected = ranked
-    .filter(item => !query || item.score > 0)
+  const matched = query
+    ? ranked.filter(item => item.score >= QUERY_MATCH_MIN_SCORE)
+    : ranked;
+  const selected = matched
     .slice(0, maxItems)
     .map(item => summaryOf(item.record));
-  const hasMore = ranked.length > selected.length || discovered.coverage.incompleteSources.length > 0;
+  const hasMore = matched.length > selected.length || discovered.coverage.incompleteSources.length > 0;
   const snapshot = {
     schemaVersion: CAPABILITY_SCHEMA_VERSION,
     runtimeVersion: CAPABILITY_RUNTIME_VERSION,
@@ -776,7 +819,8 @@ export function findCapabilityMatches(query, {
   now = new Date().toISOString(),
 } = {}) {
   const discovered = discoverCapabilityRecords({ home, workspace, query, skillRoots, resolver, now });
-  const ranked = rankCapabilities(query, discovered.records).filter(item => item.score > 0);
+  const ranked = rankCapabilities(query, discovered.records)
+    .filter(item => item.score >= QUERY_MATCH_MIN_SCORE);
   const result = {
     schemaVersion: CAPABILITY_SCHEMA_VERSION,
     runtimeVersion: CAPABILITY_RUNTIME_VERSION,

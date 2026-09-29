@@ -371,10 +371,9 @@ async function main() {
   const requestStart = performance.now();
   if (requiresDeterministicDiscovery(task)) {
     const snapshot = buildContextSnapshot({ home: HOME, query: task });
-    const selectedSkill = snapshot.capabilities.find(item => item.kind === "skill")?.name || "none";
     console.log(renderContextMarkdown(snapshot));
     console.error("[how-to-use] backend=deterministic model=none thinking=none" +
-      " preselected_skill=" + selectedSkill +
+      " preselected_skill=none" +
       " elapsed_ms=" + Math.round(performance.now() - requestStart));
     return;
   }

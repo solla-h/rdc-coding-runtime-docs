@@ -299,6 +299,7 @@ test("how-to-use deterministic fallback needs no Router config or network", t =>
   assert.match(run.stdout, /RDC capability context/);
   assert.match(run.stdout, /demo-capability/);
   assert.match(run.stderr, /backend=deterministic/);
+  assert.match(run.stderr, /preselected_skill=none/);
   assert.equal(fs.existsSync(path.join(home, ".rdc", "how-to-use", "pi-agent", "models.json")), false);
 });
 
@@ -338,4 +339,52 @@ test("describe re-resolves a PATH command from its stable capability id", t => {
   assert.equal(result.capability.name, "docsify");
   assert.equal(result.capability.details.command, "docsify");
   assert.deepEqual(result.capability.observation.facts, ["command_resolves"]);
+});
+
+test("natural-language installed query resolves the named CLI without broad term probing", t => {
+  const home = tempDir(t);
+  const seen = [];
+  const result = findCapabilityMatches(
+    "read-only no-network determine whether docsify is installed; do not modify anything",
+    {
+      home,
+      skillRoots: [],
+      resolver: name => {
+        seen.push(name);
+        return name === "docsify" ? ["C:\\Tools\\docsify.cmd"] : [];
+      },
+      now: NOW,
+    },
+  );
+  assert.deepEqual(seen, ["docsify"]);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.matches[0].name, "docsify");
+});
+
+test("constraint prose does not surface unrelated Skill substring matches", t => {
+  const home = tempDir(t);
+  const root = path.join(home, "skills");
+  writeSkill(root, "lark-note", "lark-note",
+    "Read a Lark note by note_id and inspect its transcript.");
+  writeSkill(root, "codebase-design", "codebase-design",
+    "Design or improve a codebase module.");
+  const query = "read-only no-network determine whether docsify is installed; do not modify anything";
+  const snapshot = buildContextSnapshot({
+    home,
+    query,
+    skillRoots: [{ alias: "fixture", path: root }],
+    resolver: () => [],
+    now: NOW,
+  });
+  assert.deepEqual(snapshot.capabilities, []);
+  assert.equal(snapshot.coverage.incompleteSources.length, 0);
+  assert.equal(snapshot.coverage.hasMore, false);
+
+  const found = findCapabilityMatches(query, {
+    home,
+    skillRoots: [{ alias: "fixture", path: root }],
+    resolver: () => [],
+    now: NOW,
+  });
+  assert.deepEqual(found.matches, []);
 });
