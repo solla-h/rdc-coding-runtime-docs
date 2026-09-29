@@ -97,6 +97,52 @@ User Pi Skills from ~/.pi/agent/skills are shared through settings.json.
 Use only read/grep/find/ls. Do not mutate repositories or external systems.
 Never request or expose credentials.
 `, "utf8");
+
+fs.writeFileSync(path.join(agentDir, "README.md"), `# Generated RDC Router Pi Runtime
+
+This directory is generated and maintained by the RDC \`how-to-use\` runtime.
+
+## User configuration
+
+Edit this file instead:
+
+\`\`\`text
+..\\config.json
+\`\`\`
+
+That is the single user-facing configuration source for API protocol, Base URL,
+API key, model ID, and thinking level.
+
+## Generated files
+
+Do not edit these files directly unless you are debugging the runtime:
+
+- \`models.json\` — generated Pi provider/model adapter derived from \`..\\config.json\`.
+- \`settings.json\` — generated Pi runtime settings, including thinking level and shared Skill sources.
+- \`APPEND_SYSTEM.md\` — generated read-only capability-advisor system instructions.
+- \`auth.json\` — Pi's isolated auth store. It may be \`{}\` when the custom router provider uses the API key from \`models.json\`.
+- \`models-store.json\` and backup files — Pi/runtime internal state or migration artifacts.
+
+Changes made directly to generated files may be overwritten when configuration is synchronized.
+
+## Common commands
+
+\`\`\`text
+how-to-use --reconfigure
+how-to-use --verify-config
+how-to-use --benchmark
+how-to-use --self-check
+\`\`\`
+
+Effective configuration flow:
+
+\`\`\`text
+..\\config.json
+    -> models.json + settings.json
+    -> dedicated Pi runtime
+\`\`\`
+`, "utf8");
+
 writeJson(statePath, {
   version: 3,
   validated: false,
