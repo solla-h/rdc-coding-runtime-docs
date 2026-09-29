@@ -5,7 +5,10 @@ This directory contains the local runtime used by the RDC Coding Runtime plugin'
 ## Files
 
 - `how-to-use.mjs` — local capability router/advisor CLI.
+- `rdc-cap.mjs` — deterministic capability discovery CLI (`context/find/describe`).
+- `lib/capabilities.mjs` — shared bounded discovery and projection module used by both CLIs.
 - `bootstrap-router.mjs` — creates or migrates the dedicated router configuration and opens it for user editing.
+- `capabilities.test.mjs` — source-level regression coverage; it is not required in the installed runtime.
 
 ## Local layout
 
@@ -14,6 +17,9 @@ The runtime is installed under:
 ```text
 ~/.rdc/how-to-use/
 ├── how-to-use.mjs
+├── rdc-cap.mjs
+├── lib/
+│   └── capabilities.mjs
 ├── bootstrap-router.mjs
 ├── config.json
 ├── backend-state.json
@@ -56,11 +62,40 @@ how-to-use --verify-config
 how-to-use --benchmark
 how-to-use --self-check
 how-to-use "<bounded task capsule>"
+
+rdc-cap context --workspace <path> [--query <short-task>] [--json]
+rdc-cap find <query> --workspace <path> [--json]
+rdc-cap describe <capability-id> --workspace <path> [--json]
 ```
+
+During source development the discovery CLI can also be run as `node runtime/rdc-cap.mjs ...`. The stable plugin bootstrap must expose the `rdc-cap` command shim when this runtime version is released.
+
+## Deterministic capability discovery
+
+`rdc-cap` is intentionally read-only. Its discovery path does not install, download, call the Router model, read Router credentials, start discovered tools, or write runtime/project files.
+
+The default discovery domain is bounded to:
+
+- `~/.agents/skills` and `~/.pi/agent/skills`;
+- workspace Skill roots only when root project instructions explicitly reference those roots;
+- `package.json` / `pyproject.toml` declarations in the selected workspace;
+- exact PATH resolution for task-relevant or explicitly queried commands;
+- sanitized durable hints from `~/.rdc/MACHINE_CONTEXT.md`.
+
+It does not scan the Codex plugin cache, enumerate every PATH executable, or recursively inventory the home directory. Symlink/Junction targets may be followed only when they stay inside the set of explicitly allowed Skill roots; canonical paths prevent the same Skill from being registered twice.
+
+`how-to-use` reuses the same Skill discovery module. Normal advisor requests no longer rewrite generated `models.json` / `settings.json`; those files are synchronized by bootstrap/config verification. Tasks that explicitly require read-only/no-mutation or no-network behavior fall back to deterministic local discovery instead of starting the remote advisor.
 
 ## Dogfood evidence
 
 Validated on Windows with Pi 0.87.1 and a dedicated Anthropic Messages-compatible Claude Sonnet 4.6 endpoint.
+
+RDC Local Capability Runtime v1 dogfood on 2026-09-29:
+
+- `node --test runtime/capabilities.test.mjs`: **18 passed, 0 failed**.
+- Live `context --query git` against the real machine Skill roots: 0 incomplete sources after canonical cross-root Junction handling; serialized result remained below the 12 KiB budget.
+- Live `find git -> describe <command-id>` re-resolved the current PATH command and returned `command_resolves`.
+- A normal Pi-backed `how-to-use` request completed successfully while SHA256 and modification times for generated `models.json` and `settings.json` remained unchanged.
 
 Observed benchmark:
 
