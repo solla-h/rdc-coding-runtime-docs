@@ -109,7 +109,10 @@ Validated on Windows with Pi 0.87.1 and a dedicated Anthropic Messages-compatibl
 
 RDC Local Capability Runtime v1 dogfood:
 
-- Runtime 0.6.1 candidate keeps the 0.6 deterministic discovery contract while restoring the production advisor to **one native Pi Agent run**.
+- Runtime 0.6.1 restored the production advisor to **one native Pi Agent run** while preserving deterministic discovery.
+- Fresh-session 0.6.1 dogfood proved the native Pi run itself worked, but the primary agent started duplicate `Get-Command` / editor inspection while the owning advisor PID was still alive.
+- Runtime 0.6.2 candidate hardens that remaining control-plane seam: it emits `advisor_running ... wait_for_pid=true` immediately before the blocking Pi run and documents active PID ownership as an exclusive capability-investigation gate.
+- A source smoke confirmed the marker appears in initial process output while the same advisor PID remains active.
 - `node --test runtime/capabilities.test.mjs`: **24 passed, 0 failed**; syntax checks and `git diff --check` also pass.
 - `rdc-cap context` remains an **unranked** evidence catalog with `semanticSelectionPerformed=false`; `rdc-cap find` remains exact name/ID lookup only.
 - Production `how-to-use` no longer contains `routePrompt / parseJsonObject / normalizeRoute / collectEvidence / finalPrompt / semanticAdvisor / modelCall` and no longer disables tools or Skills.
@@ -140,9 +143,17 @@ A real read-only Feishu/Lark Base task selected the installed `lark-base` Skill 
 
 ## Advisor guardrails
 
-The primary ChatGPT agent should launch one `how-to-use` request and keep ownership of that PID. A normal advisor request can be silent for tens of seconds; do not kill or duplicate it merely because output has not appeared yet. The current advisor path allows roughly 90 seconds for Pi reasoning before treating it as a timeout.
+The primary ChatGPT agent should launch one `how-to-use` request and treat that PID as the **exclusive owner of capability investigation** until it exits, errors, or reaches the advisor timeout. A normal advisor request can be silent for tens of seconds. An empty `read_process_output` does **not** release PID ownership and is not permission to branch into a parallel investigation.
 
-While an advisor request is running, do not start a second broad inventory of PATH tools, npm globals, Skill roots, home directories, or package trees. Wait for the advisor result, then perform only targeted live verification of claims that matter to the decision.
+While that PID is active, do not start `Get-Command`/PATH scans, npm-global scans, editor-install inspection, another `rdc-cap`, another advisor, Skill-root scans, home-directory scans, or package-tree inventory for the same capability question. Continue observing the same PID only. After it exits, perform only targeted live verification of claims that materially affect the decision.
+
+The launcher emits an immediate progress marker before entering the blocking native Pi run:
+
+```text
+[how-to-use] advisor_running backend=pi agent_loop=native wait_for_pid=true timeout_ms=90000
+```
+
+Treat `wait_for_pid=true` as an explicit control-plane gate: do not duplicate capability investigation while the owning PID is alive.
 
 The Pi model interprets task constraints such as read-only, no-install, no-download, no-network, and no-mutation semantically inside the same Agent run. Deterministic evidence tools do not parse natural language through regexes, stop-word lists, or lexical scoring.
 

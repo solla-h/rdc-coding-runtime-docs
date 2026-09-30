@@ -430,6 +430,11 @@ test("production advisor delegates semantic selection and evidence iteration to 
   const source = fs.readFileSync(path.join(runtimeDir, "how-to-use.mjs"), "utf8");
   assert.match(source, /advisorTools:true/);
   assert.match(source, /agent_loop=native/);
+  assert.match(source, /wait_for_pid=true/);
+  const ownershipMarker = source.indexOf("[how-to-use] advisor_running backend=pi");
+  const blockingPiRun = source.indexOf("const run = piRun(advisorPrompt");
+  assert.ok(ownershipMarker >= 0, "advisor ownership marker must exist");
+  assert.ok(blockingPiRun > ownershipMarker, "ownership marker must be emitted before the blocking Pi run");
   assert.match(source, /--extension/);
   assert.match(source, /capability_context,capability_describe,command_resolve/);
   for (const removed of [

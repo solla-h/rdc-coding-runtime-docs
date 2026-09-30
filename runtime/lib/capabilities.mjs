@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 export const CAPABILITY_SCHEMA_VERSION = 2;
-export const CAPABILITY_RUNTIME_VERSION = "0.6.1";
+export const CAPABILITY_RUNTIME_VERSION = "0.6.2";
 export const DEFAULT_MAX_CONTEXT_BYTES = 48 * 1024;
 export const DEFAULT_MAX_CONTEXT_ITEMS = 120;
 const DEFAULT_MAX_SKILLS = 180;
