@@ -744,12 +744,12 @@
       </a>
 
       <div class="nav-right">
-        <span class="version">v0.4.0</span>
+        <span class="version">v0.6.3</span>
         <nav class="navlinks" aria-label="Page sections">
           <a href="#workflow">Workflow</a>
           <a href="#advisor">Local advisor</a>
           <a href="#bootstrap">Bootstrap</a>
-          <a href="#jobs">Jobs</a>
+          <a href="#jobs">Execution</a>
           <a href="#recovery">Recovery</a>
           <a href="#versions">Versions</a>
         </nav>
@@ -762,7 +762,7 @@
       <div class="wrap hero-grid">
         <div>
           <h1>A disciplined local coding runtime that knows the machine it is using.</h1>
-          <p class="lead">Remote Desktop Commander provides execution. RDC Coding Runtime adds durable machine context, workspace safety, local capability routing, dedicated first-run bootstrap, resumable jobs, bounded evidence, validation, and multi-chat concurrency rules.</p>
+          <p class="lead">Remote Desktop Commander provides execution. RDC Coding Runtime adds durable machine context, workspace safety, local capability routing, single-owner execution, outcome reconciliation, bounded evidence, validation, and multi-chat concurrency rules.</p>
 
           <div class="actions">
             <a class="button primary" href="#workflow">Read the operating contract</a>
@@ -774,7 +774,7 @@
             <span>Windows-first</span>
             <span>Machine-context aware</span>
             <span>Skill-lazy</span>
-            <span>PID-resumable</span>
+            <span>Single-owner execution</span>
           </div>
         </div>
 
@@ -785,7 +785,7 @@
           </div>
           <div class="runtime-row">
             <div class="runtime-name">RDC Coding Runtime</div>
-            <div class="runtime-role">Supplies the workspace, machine-context, bootstrap, recovery, and concurrency contract.</div>
+            <div class="runtime-role">Supplies the workspace, machine-context, execution-ownership, recovery, and concurrency contract.</div>
           </div>
           <div class="runtime-row">
             <div class="runtime-name">how-to-use advisor</div>
@@ -822,6 +822,10 @@
           <div class="contract-row">
             <strong class="contract-title">Read before edit</strong>
             <p>Inspect the exact target, make the smallest justified change, re-read the result, then inspect the diff.</p>
+          </div>
+          <div class="contract-row">
+            <strong class="contract-title">Keep one execution owner</strong>
+            <p>For long-running, expensive, or effectful work, retain the same device, workspace, command/target, and PID/session until the outcome is settled. Timeout or silence does not authorize a duplicate run.</p>
           </div>
           <div class="contract-row">
             <strong class="contract-title">Validate in layers</strong>
@@ -951,8 +955,8 @@ start_process(command="...")
     <section id="jobs">
       <div class="wrap">
         <div class="section-head">
-          <h2>Long jobs keep their identity</h2>
-          <p>A process can outlive a tool call, a chat turn, or a stalled browser stream. The PID is durable evidence; the UI is not.</p>
+          <h2>Execution keeps one owner</h2>
+          <p>A process or mutation can outlive a tool call, a chat turn, or a stalled browser stream. Keep one authoritative owner until the outcome is settled; the UI is not that owner.</p>
         </div>
 
         <div class="rail" aria-label="Long-running job policy">
@@ -974,7 +978,7 @@ start_process(command="...")
         </div>
 
         <div class="notice">
-          <strong>Do not duplicate a long command</strong> because ChatGPT stopped updating, a tool call timed out, or stream recovery failed. Reconcile the original PID first.
+          <strong>Do not duplicate unresolved work</strong> because ChatGPT stopped updating, a tool call timed out, or transport failed. Reconcile the original PID/session or mutation target first; unresolved effectful work remains <code>OUTCOME_UNKNOWN</code>.
         </div>
       </div>
     </section>
@@ -1046,14 +1050,13 @@ read_process_output(pid=1234, offset=0)</code></pre>
             <li><span>Remote CI state</span></li>
           </ol>
 
-          <div class="state-block" aria-label="Runtime task states">
-            <strong>Task state</strong>
-            <code>RUNNING
+          <div class="state-block" aria-label="Execution outcome states">
+            <strong>Outcome state</strong>
+            <code>NOT_STARTED
+RUNNING
 SUCCEEDED
 FAILED
-UNKNOWN
-BLOCKED
-LOST</code>
+OUTCOME_UNKNOWN</code>
           </div>
         </div>
       </div>
@@ -1079,7 +1082,7 @@ LOST</code>
 
           <details>
             <summary>ChatGPT says “stream recovery polling timed out”</summary>
-            <p>This is a ChatGPT Web turn/stream symptom. It does not prove the Windows process stopped. Reconnect through RDC and inspect the known PID or session once.</p>
+            <p>This is a ChatGPT Web turn/stream symptom. It does not prove the Windows process stopped or failed. Reconnect through RDC and reconcile the known PID/session or target state before any retry.</p>
           </details>
 
           <details>
@@ -1108,6 +1111,21 @@ LOST</code>
         </div>
 
         <div class="timeline">
+          <div class="release">
+            <div class="release-tag">0.6.3</div>
+            <strong class="release-title">Execution ownership + outcome reconciliation</strong>
+            <p>Generalizes the proven advisor PID-ownership rule to long-running, expensive, and effectful work. Unknown outcomes stay unknown until reconciled; no generic Job runtime, checkpoint database, or second Agent Loop is added.</p>
+          </div>
+          <div class="release">
+            <div class="release-tag">0.6.2</div>
+            <strong class="release-title">Exclusive advisor PID ownership</strong>
+            <p>Adds the immediate <code>wait_for_pid=true</code> ownership marker and prevents duplicate capability investigation while the native Pi advisor is still running.</p>
+          </div>
+          <div class="release">
+            <div class="release-tag">0.6.1</div>
+            <strong class="release-title">Native Pi Agent Loop restored</strong>
+            <p>Removes the outer semantic router, two-pass LLM orchestration, and thin production fallback while retaining deterministic read-only capability evidence.</p>
+          </div>
           <div class="release">
             <div class="release-tag">0.4.0</div>
             <strong class="release-title">Bootstrap + dedicated local capability router</strong>
@@ -1160,7 +1178,7 @@ LOST</code>
 
   <footer>
     <div class="wrap footer-row">
-      <span><strong>RDC Coding Runtime</strong> is the policy, machine-context, capability-routing, and workflow layer.</span>
+      <span><strong>RDC Coding Runtime</strong> is the policy, machine-context, capability-routing, execution-ownership, and workflow layer.</span>
       <span>Remote Desktop Commander remains the execution transport.</span>
     </div>
   </footer>
