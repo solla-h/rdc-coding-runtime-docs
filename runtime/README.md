@@ -92,9 +92,10 @@ Validated on Windows with Pi 0.87.1 and a dedicated Anthropic Messages-compatibl
 
 RDC Local Capability Runtime v1 dogfood on 2026-09-29:
 
-- `node --test runtime/capabilities.test.mjs`: **18 passed, 0 failed**.
+- `node --test runtime/capabilities.test.mjs`: **20 passed, 0 failed**.
 - Live `context --query git` against the real machine Skill roots: 0 incomplete sources after canonical cross-root Junction handling; serialized result remained below the 12 KiB budget.
 - Live `find git -> describe <command-id>` re-resolved the current PATH command and returned `command_resolves`.
+- Runtime 0.5.1 hardening: `read-only no-network determine whether docsify is installed` probes only `command:docsify`; with Docsify absent it returns 0 matches / 0 capabilities / `hasMore=false` and deterministic metadata reports `preselected_skill=none`.
 - A normal Pi-backed `how-to-use` request completed successfully while SHA256 and modification times for generated `models.json` and `settings.json` remained unchanged.
 
 Observed benchmark:
