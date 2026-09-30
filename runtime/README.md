@@ -4,9 +4,10 @@ This directory contains the local runtime used by the RDC Coding Runtime plugin'
 
 ## Files
 
-- `how-to-use.mjs` — local capability router/advisor CLI.
+- `how-to-use.mjs` — launcher/runtime adapter for one restricted native Pi Agent advisor run.
+- `pi-capability-tools.ts` — narrow read-only Pi extension exposing deterministic capability evidence tools.
 - `rdc-cap.mjs` — deterministic capability discovery CLI (`context/find/describe`).
-- `lib/capabilities.mjs` — shared bounded discovery and projection module used by both CLIs.
+- `lib/capabilities.mjs` — shared bounded discovery and projection module used by both the CLI and Pi extension.
 - `bootstrap-router.mjs` — creates or migrates the dedicated router configuration and opens it for user editing.
 - `capabilities.test.mjs` — source-level regression coverage; it is not required in the installed runtime.
 
@@ -17,6 +18,7 @@ The runtime is installed under:
 ```text
 ~/.rdc/how-to-use/
 ├── how-to-use.mjs
+├── pi-capability-tools.ts
 ├── rdc-cap.mjs
 ├── lib/
 │   └── capabilities.mjs
@@ -85,14 +87,15 @@ The default discovery domain is bounded to:
 
 `rdc-cap context` returns an **unranked** capability catalog. The optional `--query` is retained as task/provenance context; it is not tokenized, scored, or used to filter capabilities. `rdc-cap find` is an exact capability-name/ID lookup, not a semantic search endpoint.
 
-Semantic work belongs to an LLM:
+Semantic work belongs to one native Pi Agent run:
 
-1. `how-to-use` sends the bounded unranked catalog, machine hints, project evidence, and task to the configured Router model.
-2. The Router returns structured JSON with selected stable capability IDs, exact CLI names that require verification, normalized task constraints, and a reason.
-3. Runtime code validates IDs and performs exact PATH checks; it never treats an LLM candidate as proof of installation.
-4. A second LLM pass produces advice grounded in the verified descriptors and command-resolution evidence.
+1. `how-to-use` launches Pi once in the requested workspace with Skills enabled.
+2. Pi sees installed Skill names/descriptions, loads full Skill instructions on demand, and owns the model -> tool -> result -> next-turn Agent Loop.
+3. Pi can use only `read/grep/find/ls` plus the narrow read-only evidence tools `capability_context`, `capability_describe`, and `command_resolve`.
+4. Those evidence tools reuse `lib/capabilities.mjs`; they do not perform semantic ranking, execute arbitrary commands, or mutate the machine.
+5. Pi returns final advice to the primary ChatGPT Web agent, which still owns all effectful RDC operations.
 
-There is no stop-word list, lexical score, keyword threshold, regex natural-language CLI extraction, or Skill preselection in the semantic path.
+There is no stop-word list, lexical score, keyword threshold, regex natural-language CLI extraction, manual Skill preselection, route-JSON pass, or second advice-model pass in the production semantic path.
 
 `how-to-use --offline` explicitly disables Router inference and returns only the unranked deterministic catalog. Use it when advisor/control-plane network access itself is prohibited. Natural-language task constraints are otherwise interpreted by the LLM and applied to the target operation; they are not parsed by hand-written keyword rules.
 
@@ -106,15 +109,14 @@ Validated on Windows with Pi 0.87.1 and a dedicated Anthropic Messages-compatibl
 
 RDC Local Capability Runtime v1 dogfood:
 
-- Runtime 0.6.0 removes deterministic semantic ranking from the discovery layer.
-- `node --test runtime/capabilities.test.mjs`: **22 passed, 0 failed** during the 0.6.0 refactor.
-- `rdc-cap context` returns an unranked catalog with `semanticSelectionPerformed=false`; natural-language prose does not change which Skill summaries appear.
-- `rdc-cap find` performs exact name/ID lookup and exact command resolution only; natural-language prose does not trigger PATH probes.
-- Package-manager inference now returns unknown when neither `packageManager` nor a supported lockfile provides evidence; npm is no longer an unconditional fallback.
-- Live 0.6.0 Router dogfood on `claude-code-book` selected **no unrelated Skill**, semantically proposed `mdbook/mkdocs/docsify/vitepress/honkit/gitbook/node/npm` as CLI candidates, verified the first six absent and Node/npm present, and recommended project inspection rather than the previous false `review` / `lark-markdown` matches.
-- Positive routing dogfood for a Feishu/Lark Base read task selected stable capability ID `skill:agents:lark-base:9c3a2cf22a`, proposed `lark-cli` for exact PATH verification, verified it, and generated advice from the real Skill instructions.
-- Both live semantic dogfoods completed with `backend=pi model=claude-sonnet-4-6 thinking=xhigh` in about 20 seconds each and performed no project mutation or installation.
-
+- Runtime 0.6.1 candidate keeps the 0.6 deterministic discovery contract while restoring the production advisor to **one native Pi Agent run**.
+- `node --test runtime/capabilities.test.mjs`: **24 passed, 0 failed**; syntax checks and `git diff --check` also pass.
+- `rdc-cap context` remains an **unranked** evidence catalog with `semanticSelectionPerformed=false`; `rdc-cap find` remains exact name/ID lookup only.
+- Production `how-to-use` no longer contains `routePrompt / parseJsonObject / normalizeRoute / collectEvidence / finalPrompt / semanticAdvisor / modelCall` and no longer disables tools or Skills.
+- The Pi run is restricted to `read/grep/find/ls` plus `capability_context / capability_describe / command_resolve`; the extension reuses `lib/capabilities.mjs` and has no generic shell or mutation tool.
+- Live Markdown-book source dogfood completed as `backend=pi ... agent_loop=native` in about 39 seconds. Pi verified `code` on PATH, rejected raw HTTP serving as a Markdown-preview substitute, and selected VS Code's built-in rendered preview without install/download/mutation.
+- Live Feishu/Lark Base source dogfood completed as `backend=pi ... agent_loop=native` in about 27 seconds. With no preselected Skill, Pi loaded `skill:agents:lark-base:9c3a2cf22a` from `~/.agents/skills`, verified `lark-cli`, and recovered the real `+url-resolve -> +record-list` path without calling the external business system.
+- Package-manager inference still returns unknown when neither `packageManager` nor a supported lockfile provides evidence; npm is not an unconditional fallback.
 Observed benchmark:
 
 ```text
@@ -142,14 +144,14 @@ The primary ChatGPT agent should launch one `how-to-use` request and keep owners
 
 While an advisor request is running, do not start a second broad inventory of PATH tools, npm globals, Skill roots, home directories, or package trees. Wait for the advisor result, then perform only targeted live verification of claims that matter to the decision.
 
-The Router model interprets task constraints such as read-only, no-install, no-download, no-network, and no-mutation semantically and returns them in a structured decision. Runtime code then uses those constraints as evidence for advice; it does not attempt to understand natural language through regexes or stop-word lists.
+The Pi model interprets task constraints such as read-only, no-install, no-download, no-network, and no-mutation semantically inside the same Agent run. Deterministic evidence tools do not parse natural language through regexes, stop-word lists, or lexical scoring.
 
-Stable user-level capabilities are preferred over private dependencies embedded inside another application's package tree. The Router distinguishes verified capabilities from candidates requiring verification, while runtime code owns the actual verification.
+Stable user-level capabilities are preferred over private dependencies embedded inside another application's package tree. Pi must use the narrow evidence tools for claims that require deterministic proof: exact capability IDs are re-resolved with `capability_describe`, and exact CLI installation claims are checked with `command_resolve`.
 
 A normal successful request emits bounded runtime metadata, for example:
 
 ```text
-[how-to-use] backend=pi model=claude-sonnet-4-6 thinking=xhigh selected_capabilities=none command_candidates=mdbook,mkdocs,docsify,vitepress,node,npm elapsed_ms=19804
+[how-to-use] backend=pi model=claude-sonnet-4-6 thinking=xhigh agent_loop=native elapsed_ms=...
 ```
 
-There is no deterministic Skill preselection in 0.6.0. Stable capability IDs selected by the LLM are re-resolved before their instructions are used.
+Production advice is one Pi Agent run. Skill selection happens through Pi's native Skill discovery/loading, while exact capability and CLI evidence is obtained only when Pi calls the narrow read-only evidence tools.
