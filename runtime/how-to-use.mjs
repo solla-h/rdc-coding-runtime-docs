@@ -4,22 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import {
   buildContextSnapshot,
-  describeCapability,
   discoverSkillRecords,
   renderContextMarkdown,
 } from "./lib/capabilities.mjs";
 
 const HOME = os.homedir();
 const ROOT = path.join(HOME, ".rdc", "how-to-use");
-const MACHINE_CONTEXT = path.join(HOME, ".rdc", "MACHINE_CONTEXT.md");
+const RUNTIME_DIR = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = path.join(ROOT, "pi-agent");
 const CONFIG_PATH = path.join(ROOT, "config.json");
 const MODELS_PATH = path.join(AGENT_DIR, "models.json");
 const SETTINGS_PATH = path.join(AGENT_DIR, "settings.json");
 const STATE_PATH = path.join(ROOT, "backend-state.json");
 const BOOTSTRAP = path.join(ROOT, "bootstrap-router.mjs");
+const ADVISOR_EXTENSION = path.join(RUNTIME_DIR, "pi-capability-tools.ts");
 const PLACEHOLDER = "REPLACE_WITH_";
 
 function readText(p, max = 20000) {
@@ -95,14 +96,26 @@ function piRun(prompt, opts = {}) {
   if (!pi) return { ok:false, ms:0, output:"", reason:"pi_not_found" };
   const { model, thinking } = configInfo();
   const args = ["-NoProfile", "-File", pi, "-p", "--no-session", "--no-context-files", "--no-approve"];
-  if (opts.noTools) args.push("--no-tools"); else args.push("--tools", "read,grep,find,ls");
-  if (opts.skillPath) args.push("--no-skills", "--skill", opts.skillPath);
-  else if (opts.noSkills) args.push("--no-skills");
+  if (opts.noTools) {
+    args.push("--no-tools");
+  } else if (opts.advisorTools) {
+    args.push("--extension", ADVISOR_EXTENSION);
+    args.push("--tools", "read,grep,find,ls,capability_context,capability_describe,command_resolve");
+  } else {
+    args.push("--tools", "read,grep,find,ls");
+  }
+  if (opts.noSkills) args.push("--no-skills");
   args.push("--provider", "rdc-router", "--model", model.id, "--thinking", thinking, prompt);
+  const workspace = opts.workspace ? path.resolve(opts.workspace) : process.cwd();
   const start = performance.now();
   const run = spawnSync("pwsh.exe", args, {
-    encoding:"utf8", windowsHide:true, timeout:opts.timeout || 65000,
-    env:{ ...process.env, PI_CODING_AGENT_DIR:AGENT_DIR, PI_SKIP_VERSION_CHECK:"1" }
+    encoding:"utf8", windowsHide:true, timeout:opts.timeout || 65000, cwd:workspace,
+    env:{
+      ...process.env,
+      PI_CODING_AGENT_DIR:AGENT_DIR,
+      PI_SKIP_VERSION_CHECK:"1",
+      RDC_ADVISOR_WORKSPACE:workspace,
+    }
   });
   const ms = Math.round(performance.now() - start);
   const output = ((run.stdout || "") + "\n" + (run.stderr || "")).trim();
@@ -111,49 +124,6 @@ function piRun(prompt, opts = {}) {
     ms, output,
     reason: run.error?.code === "ETIMEDOUT" || run.signal ? "timeout" : (run.status === 0 ? "ok" : "exit_" + run.status)
   };
-}
-function extractOpenAI(data) {
-  const choice = data.choices?.[0] || {};
-  const msg = choice.message || {};
-  return String(msg.content || msg.reasoning_content || choice.text || "").trim();
-}
-function anthropicUrl(base) {
-  const b = base.replace(/\/$/, "");
-  if (/\/v1\/messages$/i.test(b)) return b;
-  if (/\/v1$/i.test(b)) return b + "/messages";
-  return b + "/v1/messages";
-}
-async function thinLlm(prompt, maxTokens = 1200) {
-  const { provider, model } = configInfo();
-  let url, headers, body;
-  if (provider.api === "anthropic-messages") {
-    url = anthropicUrl(provider.baseUrl);
-    headers = {
-      "content-type":"application/json",
-      "x-api-key":provider.apiKey,
-      "anthropic-version":"2023-06-01",
-      ...(provider.headers || {})
-    };
-    body = { model:model.id, max_tokens:maxTokens, messages:[{role:"user",content:prompt}] };
-  } else {
-    url = provider.baseUrl.replace(/\/$/, "") + "/chat/completions";
-    headers = {
-      "content-type":"application/json",
-      "authorization":"Bearer " + provider.apiKey,
-      ...(provider.headers || {})
-    };
-    body = { model:model.id, stream:false, temperature:0, max_tokens:maxTokens, messages:[{role:"user",content:prompt}] };
-  }
-  const res = await fetch(url, {
-    method:"POST", headers, body:JSON.stringify(body), signal:AbortSignal.timeout(45000)
-  });
-  const raw = await res.text();
-  if (!res.ok) throw new Error("thin HTTP " + res.status + ": " + raw.slice(0,300));
-  const data = JSON.parse(raw);
-  if (provider.api === "anthropic-messages") {
-    return (data.content || []).filter(x => x?.type === "text").map(x => x.text).join("\n").trim();
-  }
-  return extractOpenAI(data);
 }
 async function verifyConfig() {
   const { provider, model, thinking } = configInfo({ syncDerived: true });
@@ -168,31 +138,24 @@ async function verifyConfig() {
   const basic = piRun("Reply with exactly HOW_TO_USE_PI_OK", {
     noTools:true, noSkills:true, timeout:65000
   });
-  let preferredBackend = "pi";
-  let piUsable = basic.ok && basic.output.includes("HOW_TO_USE_PI_OK");
-  let thinUsable = false;
-  if (!piUsable) {
-    try {
-      const t0 = performance.now();
-      const reply = await thinLlm("Reply with exactly HOW_TO_USE_THIN_OK", 80);
-      thinUsable = reply.includes("HOW_TO_USE_THIN_OK");
-      console.log("thin_ms=" + Math.round(performance.now() - t0));
-    } catch (e) {
-      console.log("thin_error=" + String(e.message || e).slice(0,200));
-    }
-    preferredBackend = thinUsable ? "thin" : null;
-  }
+  const piUsable = basic.ok && basic.output.includes("HOW_TO_USE_PI_OK");
   writeJson(STATE_PATH, {
-    version:3, validated:Boolean(preferredBackend), preferredBackend,
-    routerProvider:"rdc-router", model:model.id, api:provider.api, thinking,
-    piUsable, piMs:basic.ms, piReason:basic.reason, thinUsable
+    version:3,
+    validated:piUsable,
+    preferredBackend:piUsable ? "pi" : null,
+    routerProvider:"rdc-router",
+    model:model.id,
+    api:provider.api,
+    thinking,
+    piUsable,
+    piMs:basic.ms,
+    piReason:basic.reason
   });
   console.log("pi_usable=" + piUsable);
   console.log("pi_ms=" + basic.ms);
-  console.log("preferred_backend=" + (preferredBackend || "none"));
-  if (!preferredBackend) process.exitCode = 1;
-}
-function passLine(name, ok, ms, detail="") {
+  console.log("preferred_backend=" + (piUsable ? "pi" : "none"));
+  if (!piUsable) process.exitCode = 1;
+}function passLine(name, ok, ms, detail="") {
   console.log(name + "=" + (ok ? "PASS" : "FAIL") + " " + ms + "ms" + (detail ? " " + detail : ""));
 }
 function benchmark() {
@@ -232,207 +195,23 @@ function benchmark() {
     benchmark:{ basicMs:basic.ms, schemaMs:schema.ms } };
   writeJson(STATE_PATH, state2);
 }
-function exactCliEvidence(name) {
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
-    return { name, found:false, reason:"rejected_unsafe_name", resolvedPaths:[] };
-  }
-  const where = spawnSync("where.exe", [name], {
-    encoding:"utf8", windowsHide:true, timeout:3000, shell:false
-  });
-  const resolvedPaths = where.status === 0
-    ? (where.stdout || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean)
-    : [];
-  return {
-    name,
-    found: resolvedPaths.length > 0,
-    reason: resolvedPaths.length ? "command_resolves" : "not_found_in_path",
-    resolvedPaths,
-  };
-}
-
-function parseJsonObject(text) {
-  const raw = String(text || "").trim();
-  try { return JSON.parse(raw); } catch {}
-  const unfenced = raw
-    .replace(/^\`\`\`(?:json)?\s*/i, "")
-    .replace(/\s*\`\`\`$/, "");
-  try { return JSON.parse(unfenced); } catch {}
-  const first = unfenced.indexOf("{");
-  const last = unfenced.lastIndexOf("}");
-  if (first >= 0 && last > first) return JSON.parse(unfenced.slice(first, last + 1));
-  throw new Error("router did not return valid JSON");
-}
-
-function normalizeRoute(raw, snapshot) {
-  const knownIds = new Set(snapshot.capabilities.map(item => item.id));
-  const requestedIds = Array.isArray(raw?.selectedCapabilityIds) ? raw.selectedCapabilityIds : [];
-  const selectedCapabilityIds = [...new Set(
-    requestedIds.filter(value => typeof value === "string" && knownIds.has(value))
-  )].slice(0, 5);
-  const unknownCapabilityIds = [...new Set(
-    requestedIds.filter(value => typeof value === "string" && !knownIds.has(value))
-  )].slice(0, 5);
-
-  const commandCandidates = [...new Set(
-    (Array.isArray(raw?.commandCandidates) ? raw.commandCandidates : [])
-      .map(value => String(value || "").trim())
-      .filter(value => /^[A-Za-z0-9_.-]+$/.test(value))
-  )].slice(0, 8);
-
-  const allowed = new Set(["allowed", "forbidden", "unspecified"]);
-  const constraints = {};
-  for (const key of ["mutation", "install", "download", "network"]) {
-    const value = String(raw?.constraints?.[key] || "unspecified").toLowerCase();
-    constraints[key] = allowed.has(value) ? value : "unspecified";
-  }
-
-  return {
-    selectedCapabilityIds,
-    commandCandidates,
-    constraints,
-    reason: String(raw?.reason || "").slice(0, 1200),
-    unknownCapabilityIds,
-  };
-}
-
-function capabilityCatalogForPrompt(snapshot) {
-  return snapshot.capabilities.map(item => ({
-    id: item.id,
-    kind: item.kind,
-    name: item.name,
-    summary: item.summary,
-    source: item.source?.adapter,
-    hints: item.hints || undefined,
-  }));
-}
-
-function routePrompt(task, snapshot) {
+function advisorPrompt(task, workspace) {
   return [
-    "You are the semantic router for an RDC local capability runtime.",
-    "Use reasoning and semantic understanding. Do not use lexical overlap or keyword-count heuristics.",
-    "The capability catalog is evidence-backed but UNRANKED. Select entries only when they are actually relevant to the user's goal and constraints.",
-    "Interpret the user's natural-language constraints semantically.",
-    "selectedCapabilityIds MUST come from the supplied catalog IDs.",
-    "commandCandidates are exact local CLI executable names that should be verified with PATH lookup. They are verification requests, not claims that the command is installed.",
-    "If the catalog has no useful capability, selectedCapabilityIds may be empty.",
-    "Do not invent an installed capability. Prefer precision over recall.",
-    "Return JSON only with this exact shape:",
-    '{"selectedCapabilityIds":[],"commandCandidates":[],"constraints":{"mutation":"allowed|forbidden|unspecified","install":"allowed|forbidden|unspecified","download":"allowed|forbidden|unspecified","network":"allowed|forbidden|unspecified"},"reason":"short explanation"}',
-    "",
-    "TASK:",
+    "Task capsule from the primary ChatGPT Web agent:",
     task,
     "",
-    "WORKSPACE:",
-    snapshot.workspace || "(machine-level)",
-    "",
-    "MACHINE_HINTS:",
-    snapshot.machineHints || "(none)",
-    "",
-    "PROJECT_EVIDENCE:",
-    JSON.stringify(snapshot.projectEvidence),
-    "",
-    "UNRANKED_CAPABILITY_CATALOG:",
-    JSON.stringify(capabilityCatalogForPrompt(snapshot)),
-  ].join("\n");
-}
-
-function finalPrompt(task, route, evidence, snapshot) {
-  return [
-    "You advise the primary ChatGPT Web coding agent how to use local capabilities.",
-    "Reason semantically from the task, the structured router decision, and verified local evidence.",
-    "Treat the structured constraints as hard requirements for the user's target operation.",
-    "A command candidate is installed only when exact PATH verification says found=true.",
-    "A Skill is available only when its selected capability ID resolves to a real Skill descriptor.",
-    "Do not turn package declarations into claims that dependencies are installed.",
-    "Do not perform the user's mutation and do not request credentials.",
-    "If no currently verified capability fits, say so and describe the smallest targeted verification that the primary agent should perform next.",
-    "Return concise Markdown: Recommended capability, Why it fits, How to use/verify, Evidence and limitations.",
-    "",
-    "TASK:",
-    task,
+    "Act as a read-only local capability advisor. Run one native Pi agent loop until you have enough evidence to answer.",
+    "Use installed Skill descriptions for semantic selection and load full Skill instructions only when relevant.",
+    "Use read/grep/find/ls for project evidence. Use capability_context for the bounded unranked RDC catalog, capability_describe for one exact stable capability ID, and command_resolve for one exact CLI name.",
+    "Do not implement lexical or regex routing. Do not guess that a command is installed. Do not install, download, mutate files, or call external business systems.",
+    "Do not promote an adjacent capability as the recommendation merely because it is available. Preserve the user's success criteria: for example, serving raw files is not the same capability as rendering/previewing them. If no verified local capability fully fits, say so and identify the smallest remaining verification.",
+    "The primary ChatGPT Web agent owns all effectful execution through RDC.",
+    "Return concise Markdown with: Recommended capability/path, evidence, exact verification if still needed, and limitations.",
     "",
     "WORKSPACE:",
-    snapshot.workspace || "(machine-level)",
-    "",
-    "ROUTER_DECISION:",
-    JSON.stringify(route),
-    "",
-    "LOCAL_EVIDENCE:",
-    evidence.length ? evidence.join("\n\n---\n\n") : "(none)",
+    workspace || "(machine-level)"
   ].join("\n");
 }
-
-async function modelCall(backend, prompt, maxTokens = 1200) {
-  if (backend === "pi") {
-    const run = piRun(prompt, {
-      noTools:true,
-      noSkills:true,
-      timeout:90000,
-    });
-    if (!run.ok) throw new Error("Pi router failed: " + run.reason);
-    return run.output;
-  }
-  if (backend === "thin") return await thinLlm(prompt, maxTokens);
-  throw new Error("unsupported router backend: " + backend);
-}
-
-function collectEvidence(route, workspace) {
-  const evidence = [];
-  for (const id of route.selectedCapabilityIds) {
-    const described = describeCapability(id, {
-      home: HOME,
-      workspace,
-      maxSkillContentChars: 18000,
-    });
-    if (!described.found) {
-      evidence.push("Capability " + id + "\n" + JSON.stringify({
-        found:false,
-        coverage:described.coverage,
-      }));
-      continue;
-    }
-    const item = described.capability;
-    if (item.kind === "skill") {
-      evidence.push(
-        "Capability " + item.id + " (" + item.name + ")\n" +
-        "SOURCE: " + item.source.location + "\n" +
-        "OBSERVATION: " + JSON.stringify(item.observation) + "\n" +
-        "SKILL_INSTRUCTIONS:\n" + (item.details.content || "(empty)") +
-        (item.details.contentComplete ? "" : "\nFULL_CONTENT_REMAINS_AT: " + item.details.readFullPath)
-      );
-    } else {
-      evidence.push(
-        "Capability " + item.id + " (" + item.name + ")\n" +
-        JSON.stringify({ source:item.source, observation:item.observation, details:item.details }, null, 2)
-      );
-    }
-  }
-
-  for (const name of route.commandCandidates) {
-    evidence.push("Exact CLI verification " + name + "\n" + JSON.stringify(exactCliEvidence(name), null, 2));
-  }
-
-  if (route.unknownCapabilityIds.length) {
-    evidence.push("Router returned unknown capability IDs that were rejected: " + route.unknownCapabilityIds.join(", "));
-  }
-  return evidence;
-}
-
-async function semanticAdvisor(task, workspace, backend) {
-  const snapshot = buildContextSnapshot({
-    home: HOME,
-    workspace,
-    query: task,
-    maxItems: 180,
-    maxBytes: 64 * 1024,
-  });
-  const rawRoute = await modelCall(backend, routePrompt(task, snapshot), 900);
-  const route = normalizeRoute(parseJsonObject(rawRoute), snapshot);
-  const evidence = collectEvidence(route, workspace);
-  const reply = await modelCall(backend, finalPrompt(task, route, evidence, snapshot), 1800);
-  return { reply, route, snapshot };
-}
-
 function runBootstrap(reconfigure=false) {
   const args = [BOOTSTRAP];
   if (reconfigure) args.push("--reconfigure");
@@ -509,25 +288,23 @@ async function main() {
   }
 
   const state = readJson(STATE_PATH, {});
-  if (!state.validated) throw new Error("Router model is not validated; run how-to-use --verify-config");
-  const { model, thinking } = configInfo();
-
-  let backend = state.preferredBackend || "thin";
-  let result;
-  try {
-    result = await semanticAdvisor(task, parsed.workspace, backend);
-  } catch (error) {
-    if (backend !== "pi") throw error;
-    backend = "thin";
-    result = await semanticAdvisor(task, parsed.workspace, backend);
+  if (!state.validated || !state.piUsable) {
+    throw new Error("Pi backend is not verified; run how-to-use --verify-config");
   }
+  const { model, thinking } = configInfo();
+  const workspace = parsed.workspace || process.cwd();
+  const run = piRun(advisorPrompt(task, workspace), {
+    workspace,
+    advisorTools:true,
+    timeout:90000,
+  });
+  if (!run.ok) throw new Error("Pi advisor failed: " + run.reason);
 
-  console.log(result.reply);
-  console.error("[how-to-use] backend=" + backend +
+  console.log(run.output);
+  console.error("[how-to-use] backend=pi" +
     " model=" + model.id +
     " thinking=" + thinking +
-    " selected_capabilities=" + (result.route.selectedCapabilityIds.join(",") || "none") +
-    " command_candidates=" + (result.route.commandCandidates.join(",") || "none") +
+    " agent_loop=native" +
     " elapsed_ms=" + Math.round(performance.now() - requestStart));
 }
 main().catch(err => {

@@ -321,7 +321,7 @@ test("normal how-to-use still requires a validated Router and stays non-mutating
     timeout: 10000,
   });
   assert.equal(run.status, 1);
-  assert.match(run.stderr, /Router model is not validated/);
+  assert.match(run.stderr, /Pi backend is not verified/);
   assert.equal(fs.existsSync(path.join(home, ".rdc", "how-to-use")), false);
 });
 
@@ -422,4 +422,37 @@ test("exact Skill lookup preserves same-name ambiguity instead of scoring a winn
   assert.equal(result.semanticSelectionPerformed, false);
   assert.equal(result.matches.length, 2);
   assert.notEqual(result.matches[0].id, result.matches[1].id);
+});
+
+
+test("production advisor delegates semantic selection and evidence iteration to one native Pi agent loop", () => {
+  const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
+  const source = fs.readFileSync(path.join(runtimeDir, "how-to-use.mjs"), "utf8");
+  assert.match(source, /advisorTools:true/);
+  assert.match(source, /agent_loop=native/);
+  assert.match(source, /--extension/);
+  assert.match(source, /capability_context,capability_describe,command_resolve/);
+  for (const removed of [
+    "routePrompt(",
+    "parseJsonObject(",
+    "normalizeRoute(",
+    "collectEvidence(",
+    "finalPrompt(",
+    "semanticAdvisor(",
+    "modelCall(",
+  ]) {
+    assert.equal(source.includes(removed), false, removed + " should not remain in production source");
+  }
+});
+
+test("Pi advisor extension exposes only narrow read-only capability evidence tools", () => {
+  const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
+  const source = fs.readFileSync(path.join(runtimeDir, "pi-capability-tools.ts"), "utf8");
+  assert.match(source, /name: "capability_context"/);
+  assert.match(source, /name: "capability_describe"/);
+  assert.match(source, /name: "command_resolve"/);
+  assert.match(source, /buildContextSnapshot/);
+  assert.match(source, /describeCapability/);
+  assert.match(source, /findCapabilityMatches/);
+  assert.equal(/spawnSync|execFile|child_process|registerCommand|registerProvider/.test(source), false);
 });
