@@ -12,7 +12,6 @@ import {
   discoverProjectRecords,
   discoverSkillRecords,
   findCapabilityMatches,
-  likelySkills,
   parseSkillFrontmatter,
   renderContextMarkdown,
 } from "./lib/capabilities.mjs";
@@ -119,19 +118,22 @@ test("same-name Skills from distinct sources remain distinct and ambiguous", t =
   });
   assert.equal(result.records.length, 2);
   assert.notEqual(result.records[0].id, result.records[1].id);
-  assert.deepEqual(likelySkills("use dup-skill", result.records), []);
 });
 
-test("preview does not falsely preselect review", () => {
-  const records = [{
-    id: "skill:test:review:1",
-    kind: "skill",
-    name: "review",
-    summary: "Review source code changes.",
-    details: {},
-  }];
-  assert.deepEqual(likelySkills("preview this markdown book", records), []);
-  assert.equal(likelySkills("review this source code", records)[0]?.name, "review");
+test("context is an unranked catalog and does not semantically filter by query", t => {
+  const home = tempDir(t);
+  const root = path.join(home, "skills");
+  writeSkill(root, "review", "review", "Review source code changes.");
+  writeSkill(root, "lark-markdown", "lark-markdown", "Work with Feishu/Lark Markdown content.");
+  const snapshot = buildContextSnapshot({
+    home,
+    query: "preview this local Markdown book",
+    skillRoots: [{ alias: "fixture", path: root }],
+    now: NOW,
+  });
+  assert.equal(snapshot.semanticSelectionPerformed, false);
+  assert.deepEqual(snapshot.capabilities.map(item => item.name), ["lark-markdown", "review"]);
+  assert.equal(snapshot.capabilities.some(item => "score" in item), false);
 });
 
 test("package scripts are declared evidence, not runtime availability", t => {
@@ -141,11 +143,12 @@ test("package scripts are declared evidence, not runtime availability", t => {
     scripts: { test: "vitest run", preview: "vite preview" },
   }), "utf8");
   const result = discoverProjectRecords({ workspace, now: NOW });
-  const testRecord = result.records.find(record => record.name === "pnpm run test");
+  const testRecord = result.records.find(record => record.name === "package script: test");
   assert.ok(testRecord);
+  assert.equal(testRecord.details.command, "pnpm run test");
   assert.deepEqual(testRecord.observation.facts, ["project_script_declared"]);
   assert.ok(testRecord.observation.notChecked.includes("dependencies_installed"));
-  assert.match(testRecord.summary, /not executed or environment-verified/);
+  assert.match(testRecord.summary, /evidence-dependent/);
 });
 
 test("single-token find performs an exact command resolution", t => {
@@ -281,13 +284,14 @@ test("workspace switch changes project-scoped command identity", t => {
   assert.equal(second.details.cwd, two);
 });
 
-test("how-to-use deterministic fallback needs no Router config or network", t => {
+test("how-to-use explicit offline mode needs no Router config or network", t => {
   const home = tempDir(t);
   const root = path.join(home, ".agents", "skills");
   writeSkill(root, "demo", "demo-capability", "Demo local capability.");
   const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
   const run = spawnSync(process.execPath, [
     path.join(runtimeDir, "how-to-use.mjs"),
+    "--offline",
     "read-only no-network use demo-capability",
   ], {
     encoding: "utf8",
@@ -297,9 +301,10 @@ test("how-to-use deterministic fallback needs no Router config or network", t =>
   });
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /RDC capability context/);
+  assert.match(run.stdout, /Capability catalog \(unranked\)/);
   assert.match(run.stdout, /demo-capability/);
-  assert.match(run.stderr, /backend=deterministic/);
-  assert.match(run.stderr, /preselected_skill=none/);
+  assert.match(run.stderr, /backend=offline-catalog/);
+  assert.match(run.stderr, /semantic_selection=false/);
   assert.equal(fs.existsSync(path.join(home, ".rdc", "how-to-use", "pi-agent", "models.json")), false);
 });
 
@@ -341,7 +346,7 @@ test("describe re-resolves a PATH command from its stable capability id", t => {
   assert.deepEqual(result.capability.observation.facts, ["command_resolves"]);
 });
 
-test("natural-language installed query resolves the named CLI without broad term probing", t => {
+test("natural-language find does not guess CLI candidates", t => {
   const home = tempDir(t);
   const seen = [];
   const result = findCapabilityMatches(
@@ -351,17 +356,17 @@ test("natural-language installed query resolves the named CLI without broad term
       skillRoots: [],
       resolver: name => {
         seen.push(name);
-        return name === "docsify" ? ["C:\\Tools\\docsify.cmd"] : [];
+        return [];
       },
       now: NOW,
     },
   );
-  assert.deepEqual(seen, ["docsify"]);
-  assert.equal(result.matches.length, 1);
-  assert.equal(result.matches[0].name, "docsify");
+  assert.deepEqual(seen, []);
+  assert.deepEqual(result.matches, []);
+  assert.equal(result.semanticSelectionPerformed, false);
 });
 
-test("constraint prose does not surface unrelated Skill substring matches", t => {
+test("constraint prose is not interpreted by deterministic context/find", t => {
   const home = tempDir(t);
   const root = path.join(home, "skills");
   writeSkill(root, "lark-note", "lark-note",
@@ -376,7 +381,8 @@ test("constraint prose does not surface unrelated Skill substring matches", t =>
     resolver: () => [],
     now: NOW,
   });
-  assert.deepEqual(snapshot.capabilities, []);
+  assert.equal(snapshot.semanticSelectionPerformed, false);
+  assert.deepEqual(snapshot.capabilities.map(item => item.name), ["codebase-design", "lark-note"]);
   assert.equal(snapshot.coverage.incompleteSources.length, 0);
   assert.equal(snapshot.coverage.hasMore, false);
 
@@ -387,4 +393,33 @@ test("constraint prose does not surface unrelated Skill substring matches", t =>
     now: NOW,
   });
   assert.deepEqual(found.matches, []);
+});
+
+test("package manager stays unknown when no declaration or supported lockfile exists", t => {
+  const workspace = tempDir(t);
+  fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({
+    scripts: { test: "node test.mjs" },
+  }), "utf8");
+  const result = discoverProjectRecords({ workspace, now: NOW });
+  assert.match(result.evidence.map(item => item.fact).join("\n"), /package manager not determined/);
+  const record = result.records.find(item => item.name === "package script: test");
+  assert.ok(record);
+  assert.equal(record.details.command, null);
+  assert.equal(record.details.scriptName, "test");
+});
+
+test("exact Skill lookup preserves same-name ambiguity instead of scoring a winner", t => {
+  const home = tempDir(t);
+  const a = path.join(home, "a");
+  const b = path.join(home, "b");
+  writeSkill(a, "dup", "dup-skill", "First.");
+  writeSkill(b, "dup", "dup-skill", "Second.");
+  const result = findCapabilityMatches("dup-skill", {
+    home,
+    skillRoots: [{ alias: "a", path: a }, { alias: "b", path: b }],
+    now: NOW,
+  });
+  assert.equal(result.semanticSelectionPerformed, false);
+  assert.equal(result.matches.length, 2);
+  assert.notEqual(result.matches[0].id, result.matches[1].id);
 });

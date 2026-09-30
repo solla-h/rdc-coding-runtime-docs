@@ -13,7 +13,7 @@ function usage() {
   return [
     "Usage:",
     "  rdc-cap context [--workspace <path>] [--query <task>] [--json]",
-    "  rdc-cap find <query> [--workspace <path>] [--json]",
+    "  rdc-cap find <exact-name-or-id> [--workspace <path>] [--json]",
     "  rdc-cap describe <capability-id> [--workspace <path>] [--json]",
   ].join("\n");
 }
@@ -65,9 +65,9 @@ function main() {
   }
 
   if (parsed.command === "find") {
-    const query = parsed.rest.join(" ").trim();
-    if (!query) throw new Error("find requires a query");
-    const result = findCapabilityMatches(query, { workspace: parsed.workspace });
+    const lookup = parsed.rest.join(" ").trim();
+    if (!lookup) throw new Error("find requires an exact capability name or id");
+    const result = findCapabilityMatches(lookup, { workspace: parsed.workspace });
     print(result, parsed.json, renderFindMarkdown);
     return;
   }
