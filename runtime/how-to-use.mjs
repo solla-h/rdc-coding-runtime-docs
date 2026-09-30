@@ -6,8 +6,8 @@ import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import {
   buildContextSnapshot,
+  describeCapability,
   discoverSkillRecords,
-  likelySkills,
   renderContextMarkdown,
 } from "./lib/capabilities.mjs";
 
@@ -232,96 +232,207 @@ function benchmark() {
     benchmark:{ basicMs:basic.ms, schemaMs:schema.ms } };
   writeJson(STATE_PATH, state2);
 }
-function safeCliHelp(name) {
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) return "Rejected unsafe CLI name.";
-  const where = spawnSync("where.exe", [name], { encoding:"utf8", windowsHide:true, timeout:3000 });
-  if (where.status !== 0) return "CLI not found in PATH.";
-  const run = spawnSync(name, ["--help"], { encoding:"utf8", windowsHide:true, timeout:7000, shell:false });
-  return ("PATH:\n" + (where.stdout || "").trim() + "\n\nHELP:\n" +
-    ((run.stdout || "") + "\n" + (run.stderr || "")).trim()).slice(0,14000);
-}
-function skillRequiredCli(skill) {
-  if (skill.details?.bins?.length) return skill.details.bins[0];
-  const text = readText(skill.path, 6000);
-  return text.match(/bins:\s*\[\s*["']?([A-Za-z0-9_.-]+)/i)?.[1] || null;
-}
-function parseRoute(text) {
-  const cli = text.match(/^CLI:\s*(.+)$/mi)?.[1]?.trim() || "none";
-  const raw = text.match(/^SKILLS?:\s*(.+)$/mi)?.[1]?.trim() || "none";
-  const skills = raw.toLowerCase() === "none" ? [] :
-    raw.split(",").map(s => s.trim()).filter(Boolean).slice(0,3);
-  return { cli:cli.toLowerCase() === "none" ? null : cli, skills };
-}
-function routePrompt(task, context, skills) {
-  return [
-    "You are a local capability router. Use only the local evidence below.",
-    "Treat task constraints such as read-only, no install, no download, no network, and no mutation as hard requirements.",
-    "Choose at most one CLI and three Skills. Do not invent capabilities.",
-    "If multiple Skill entries share one display name, do not choose that name without disambiguating evidence.",
-    "Prefer stable user-level capabilities over private dependencies embedded inside another application's package tree.",
-    "Return exactly: CLI, SKILLS, WHY.",
-    "", "TASK:", task, "", "MACHINE_CONTEXT:", context || "(missing)", "",
-    "LOCAL_SKILLS:", skills.map(s => "- " + s.name + " [" + s.id + "]: " + s.description).join("\n")
-  ].join("\n");
-}
-function finalPrompt(task, route, evidence) {
-  return [
-    "You advise the primary ChatGPT Web agent how to use local capabilities.",
-    "Ground the answer in LOCAL EVIDENCE. Preserve multi-tool reasoning when needed.",
-    "Treat every task constraint as hard: read-only, no install, no network, no mutation, or similar constraints must be obeyed.",
-    "If a useful option would require a prohibited install/download/network action, label it only as a future option, not as currently usable.",
-    "Prefer stable user-level capabilities: PATH CLIs, explicitly configured services, canonical Skills, and documented local tools.",
-    "Do not treat another application's private node_modules/internal dependency as a normal installed capability. If mentioned at all, label it incidental and unstable.",
-    "Do not perform mutations and do not request credentials.",
-    "Return concise Markdown: Recommended capability, How, Verify first, Local evidence.",
-    "", "TASK:", task, "", "ROUTER:", route, "", "LOCAL EVIDENCE:",
-    evidence.join("\n\n---\n\n") || "(none)"
-  ].join("\n");
-}
-async function thinAdvisor(task, context, skills, autoSkills) {
-  let routeText, picked;
-  if (autoSkills.length) {
-    const cli = skillRequiredCli(autoSkills[0]);
-    routeText = "CLI: " + (cli || "none") + "\nSKILLS: " + autoSkills[0].name +
-      "\nWHY: high-confidence local Skill match";
-    picked = { cli, skills:[autoSkills[0].name] };
-  } else {
-    routeText = await thinLlm(routePrompt(task, context, skills), 420);
-    picked = parseRoute(routeText);
+function exactCliEvidence(name) {
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
+    return { name, found:false, reason:"rejected_unsafe_name", resolvedPaths:[] };
   }
+  const where = spawnSync("where.exe", [name], {
+    encoding:"utf8", windowsHide:true, timeout:3000, shell:false
+  });
+  const resolvedPaths = where.status === 0
+    ? (where.stdout || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean)
+    : [];
+  return {
+    name,
+    found: resolvedPaths.length > 0,
+    reason: resolvedPaths.length ? "command_resolves" : "not_found_in_path",
+    resolvedPaths,
+  };
+}
+
+function parseJsonObject(text) {
+  const raw = String(text || "").trim();
+  try { return JSON.parse(raw); } catch {}
+  const unfenced = raw
+    .replace(/^\`\`\`(?:json)?\s*/i, "")
+    .replace(/\s*\`\`\`$/, "");
+  try { return JSON.parse(unfenced); } catch {}
+  const first = unfenced.indexOf("{");
+  const last = unfenced.lastIndexOf("}");
+  if (first >= 0 && last > first) return JSON.parse(unfenced.slice(first, last + 1));
+  throw new Error("router did not return valid JSON");
+}
+
+function normalizeRoute(raw, snapshot) {
+  const knownIds = new Set(snapshot.capabilities.map(item => item.id));
+  const requestedIds = Array.isArray(raw?.selectedCapabilityIds) ? raw.selectedCapabilityIds : [];
+  const selectedCapabilityIds = [...new Set(
+    requestedIds.filter(value => typeof value === "string" && knownIds.has(value))
+  )].slice(0, 5);
+  const unknownCapabilityIds = [...new Set(
+    requestedIds.filter(value => typeof value === "string" && !knownIds.has(value))
+  )].slice(0, 5);
+
+  const commandCandidates = [...new Set(
+    (Array.isArray(raw?.commandCandidates) ? raw.commandCandidates : [])
+      .map(value => String(value || "").trim())
+      .filter(value => /^[A-Za-z0-9_.-]+$/.test(value))
+  )].slice(0, 8);
+
+  const allowed = new Set(["allowed", "forbidden", "unspecified"]);
+  const constraints = {};
+  for (const key of ["mutation", "install", "download", "network"]) {
+    const value = String(raw?.constraints?.[key] || "unspecified").toLowerCase();
+    constraints[key] = allowed.has(value) ? value : "unspecified";
+  }
+
+  return {
+    selectedCapabilityIds,
+    commandCandidates,
+    constraints,
+    reason: String(raw?.reason || "").slice(0, 1200),
+    unknownCapabilityIds,
+  };
+}
+
+function capabilityCatalogForPrompt(snapshot) {
+  return snapshot.capabilities.map(item => ({
+    id: item.id,
+    kind: item.kind,
+    name: item.name,
+    summary: item.summary,
+    source: item.source?.adapter,
+    hints: item.hints || undefined,
+  }));
+}
+
+function routePrompt(task, snapshot) {
+  return [
+    "You are the semantic router for an RDC local capability runtime.",
+    "Use reasoning and semantic understanding. Do not use lexical overlap or keyword-count heuristics.",
+    "The capability catalog is evidence-backed but UNRANKED. Select entries only when they are actually relevant to the user's goal and constraints.",
+    "Interpret the user's natural-language constraints semantically.",
+    "selectedCapabilityIds MUST come from the supplied catalog IDs.",
+    "commandCandidates are exact local CLI executable names that should be verified with PATH lookup. They are verification requests, not claims that the command is installed.",
+    "If the catalog has no useful capability, selectedCapabilityIds may be empty.",
+    "Do not invent an installed capability. Prefer precision over recall.",
+    "Return JSON only with this exact shape:",
+    '{"selectedCapabilityIds":[],"commandCandidates":[],"constraints":{"mutation":"allowed|forbidden|unspecified","install":"allowed|forbidden|unspecified","download":"allowed|forbidden|unspecified","network":"allowed|forbidden|unspecified"},"reason":"short explanation"}',
+    "",
+    "TASK:",
+    task,
+    "",
+    "WORKSPACE:",
+    snapshot.workspace || "(machine-level)",
+    "",
+    "MACHINE_HINTS:",
+    snapshot.machineHints || "(none)",
+    "",
+    "PROJECT_EVIDENCE:",
+    JSON.stringify(snapshot.projectEvidence),
+    "",
+    "UNRANKED_CAPABILITY_CATALOG:",
+    JSON.stringify(capabilityCatalogForPrompt(snapshot)),
+  ].join("\n");
+}
+
+function finalPrompt(task, route, evidence, snapshot) {
+  return [
+    "You advise the primary ChatGPT Web coding agent how to use local capabilities.",
+    "Reason semantically from the task, the structured router decision, and verified local evidence.",
+    "Treat the structured constraints as hard requirements for the user's target operation.",
+    "A command candidate is installed only when exact PATH verification says found=true.",
+    "A Skill is available only when its selected capability ID resolves to a real Skill descriptor.",
+    "Do not turn package declarations into claims that dependencies are installed.",
+    "Do not perform the user's mutation and do not request credentials.",
+    "If no currently verified capability fits, say so and describe the smallest targeted verification that the primary agent should perform next.",
+    "Return concise Markdown: Recommended capability, Why it fits, How to use/verify, Evidence and limitations.",
+    "",
+    "TASK:",
+    task,
+    "",
+    "WORKSPACE:",
+    snapshot.workspace || "(machine-level)",
+    "",
+    "ROUTER_DECISION:",
+    JSON.stringify(route),
+    "",
+    "LOCAL_EVIDENCE:",
+    evidence.length ? evidence.join("\n\n---\n\n") : "(none)",
+  ].join("\n");
+}
+
+async function modelCall(backend, prompt, maxTokens = 1200) {
+  if (backend === "pi") {
+    const run = piRun(prompt, {
+      noTools:true,
+      noSkills:true,
+      timeout:90000,
+    });
+    if (!run.ok) throw new Error("Pi router failed: " + run.reason);
+    return run.output;
+  }
+  if (backend === "thin") return await thinLlm(prompt, maxTokens);
+  throw new Error("unsupported router backend: " + backend);
+}
+
+function collectEvidence(route, workspace) {
   const evidence = [];
-  if (picked.cli) evidence.push("CLI " + picked.cli + "\n" + safeCliHelp(picked.cli));
-  for (const name of picked.skills) {
-    const found = findUniqueSkillByName(skills, name);
-    if (found) {
-      evidence.push("Skill " + name + " at " + found.path + "\n" + readText(found.path,18000));
-    } else if (skills.some(skill => skill.name.toLowerCase() === name.toLowerCase())) {
-      evidence.push("Skill " + name + " is ambiguous across multiple local sources; use rdc-cap find/describe to disambiguate.");
+  for (const id of route.selectedCapabilityIds) {
+    const described = describeCapability(id, {
+      home: HOME,
+      workspace,
+      maxSkillContentChars: 18000,
+    });
+    if (!described.found) {
+      evidence.push("Capability " + id + "\n" + JSON.stringify({
+        found:false,
+        coverage:described.coverage,
+      }));
+      continue;
+    }
+    const item = described.capability;
+    if (item.kind === "skill") {
+      evidence.push(
+        "Capability " + item.id + " (" + item.name + ")\n" +
+        "SOURCE: " + item.source.location + "\n" +
+        "OBSERVATION: " + JSON.stringify(item.observation) + "\n" +
+        "SKILL_INSTRUCTIONS:\n" + (item.details.content || "(empty)") +
+        (item.details.contentComplete ? "" : "\nFULL_CONTENT_REMAINS_AT: " + item.details.readFullPath)
+      );
+    } else {
+      evidence.push(
+        "Capability " + item.id + " (" + item.name + ")\n" +
+        JSON.stringify({ source:item.source, observation:item.observation, details:item.details }, null, 2)
+      );
     }
   }
-  return await thinLlm(finalPrompt(task, routeText, evidence), 1600);
-}
-function piAdvisor(task, autoSkills) {
-  let prompt = [
-    "Task capsule from the primary ChatGPT Web agent:",
-    task, "",
-    "Determine the best local capability and explain how the primary agent should use it.",
-    "Treat all constraints in the task capsule as hard requirements.",
-    "If the task says no install/download/network/mutation, do not recommend a path that requires that action as currently usable.",
-    "Prefer stable user-level capabilities: PATH CLIs, configured services, canonical Skills, and documented local tools.",
-    "Do not promote private dependencies found inside another application's node_modules or internal package tree to normal installed capabilities.",
-    "Do not infer that tool B is installed merely because tool A often depends on or integrates with it. Distinguish verified, inferred, and future capabilities; only call something installed when local evidence verifies it.",
-    "Use local Skills and evidence. Do not perform the user's mutation."
-  ].join("\n");
-  const opts = { timeout:90000 };
-  if (autoSkills.length) {
-    opts.skillPath = path.dirname(autoSkills[0].path);
-    prompt += "\n\nA high-confidence Skill match is " + autoSkills[0].name +
-      ". Read that Skill and use it.";
+
+  for (const name of route.commandCandidates) {
+    evidence.push("Exact CLI verification " + name + "\n" + JSON.stringify(exactCliEvidence(name), null, 2));
   }
-  const run = piRun(prompt, opts);
-  return run.ok ? run.output : null;
+
+  if (route.unknownCapabilityIds.length) {
+    evidence.push("Router returned unknown capability IDs that were rejected: " + route.unknownCapabilityIds.join(", "));
+  }
+  return evidence;
 }
+
+async function semanticAdvisor(task, workspace, backend) {
+  const snapshot = buildContextSnapshot({
+    home: HOME,
+    workspace,
+    query: task,
+    maxItems: 180,
+    maxBytes: 64 * 1024,
+  });
+  const rawRoute = await modelCall(backend, routePrompt(task, snapshot), 900);
+  const route = normalizeRoute(parseJsonObject(rawRoute), snapshot);
+  const evidence = collectEvidence(route, workspace);
+  const reply = await modelCall(backend, finalPrompt(task, route, evidence, snapshot), 1800);
+  return { reply, route, snapshot };
+}
+
 function runBootstrap(reconfigure=false) {
   const args = [BOOTSTRAP];
   if (reconfigure) args.push("--reconfigure");
@@ -332,6 +443,7 @@ function runBootstrap(reconfigure=false) {
   process.stderr.write(r.stderr || "");
   process.exitCode = r.status ?? 1;
 }
+
 function selfCheck() {
   const state = readJson(STATE_PATH, {});
   const skills = skillCatalog();
@@ -346,11 +458,22 @@ function selfCheck() {
   console.log("shared_agent_skills=" + fs.existsSync(path.join(HOME,".agents","skills")));
 }
 
-function requiresDeterministicDiscovery(task) {
-  const text = String(task || "");
-  const lower = text.toLowerCase();
-  return /\b(read[- ]?only|readonly|no[- ]?network|offline|no[- ]?mutation|do not modify|don't modify|without modifying)\b/.test(lower) ||
-    /(只读|不要修改|禁止修改|不得修改|不要联网|禁止联网|不得联网|不联网|离线)/.test(text);
+function parseTaskArgs(args) {
+  const rest = [...args];
+  let workspace = null;
+  let offline = false;
+  const workspaceIndex = rest.indexOf("--workspace");
+  if (workspaceIndex >= 0) {
+    if (workspaceIndex + 1 >= rest.length) throw new Error("--workspace requires a value");
+    workspace = path.resolve(rest[workspaceIndex + 1]);
+    rest.splice(workspaceIndex, 2);
+  }
+  const offlineIndex = rest.indexOf("--offline");
+  if (offlineIndex >= 0) {
+    offline = true;
+    rest.splice(offlineIndex, 1);
+  }
+  return { task:rest.join(" ").trim(), workspace, offline };
 }
 
 async function main() {
@@ -361,51 +484,52 @@ async function main() {
   if (args.includes("--benchmark")) return benchmark();
   if (args.includes("--self-check")) return selfCheck();
 
-  let task = args.join(" ").trim();
+  const parsed = parseTaskArgs(args);
+  let task = parsed.task;
   if (!task && !process.stdin.isTTY) task = fs.readFileSync(0,"utf8").trim();
   if (!task) {
-    console.error("Usage: how-to-use <task> | --bootstrap | --reconfigure | --verify-config | --benchmark | --self-check");
+    console.error("Usage: how-to-use [--workspace <path>] [--offline] <task> | --bootstrap | --reconfigure | --verify-config | --benchmark | --self-check");
     process.exit(2);
   }
 
   const requestStart = performance.now();
-  if (requiresDeterministicDiscovery(task)) {
-    const snapshot = buildContextSnapshot({ home: HOME, query: task });
-    console.log(renderContextMarkdown(snapshot));
-    console.error("[how-to-use] backend=deterministic model=none thinking=none" +
-      " preselected_skill=none" +
+  if (parsed.offline) {
+    const snapshot = buildContextSnapshot({
+      home: HOME,
+      workspace: parsed.workspace,
+      query: task,
+      maxItems: 180,
+      maxBytes: 64 * 1024,
+    });
+    console.log(renderContextMarkdown(snapshot, 64 * 1024));
+    console.error("[how-to-use] backend=offline-catalog model=none thinking=none" +
+      " semantic_selection=false" +
       " elapsed_ms=" + Math.round(performance.now() - requestStart));
     return;
   }
 
   const state = readJson(STATE_PATH, {});
   if (!state.validated) throw new Error("Router model is not validated; run how-to-use --verify-config");
-  const context = readText(MACHINE_CONTEXT, 12000);
-  const skills = skillCatalog();
-  const autoSkills = likelySkills(task, skills);
   const { model, thinking } = configInfo();
-  const selectedSkill = autoSkills[0]?.name || "none";
 
-  if (state.preferredBackend === "pi") {
-    const reply = piAdvisor(task, autoSkills);
-    if (reply) {
-      console.log(reply);
-      console.error("[how-to-use] backend=pi model=" + model.id +
-        " thinking=" + thinking +
-        " preselected_skill=" + selectedSkill +
-        " elapsed_ms=" + Math.round(performance.now() - requestStart));
-      return;
-    }
+  let backend = state.preferredBackend || "thin";
+  let result;
+  try {
+    result = await semanticAdvisor(task, parsed.workspace, backend);
+  } catch (error) {
+    if (backend !== "pi") throw error;
+    backend = "thin";
+    result = await semanticAdvisor(task, parsed.workspace, backend);
   }
 
-  const thinReply = await thinAdvisor(task, context, skills, autoSkills);
-  console.log(thinReply);
-  console.error("[how-to-use] backend=thin model=" + model.id +
+  console.log(result.reply);
+  console.error("[how-to-use] backend=" + backend +
+    " model=" + model.id +
     " thinking=" + thinking +
-    " preselected_skill=" + selectedSkill +
+    " selected_capabilities=" + (result.route.selectedCapabilityIds.join(",") || "none") +
+    " command_candidates=" + (result.route.commandCandidates.join(",") || "none") +
     " elapsed_ms=" + Math.round(performance.now() - requestStart));
 }
-
 main().catch(err => {
   console.error("how-to-use error: " + (err?.message || String(err)));
   process.exit(1);

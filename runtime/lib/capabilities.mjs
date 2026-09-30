@@ -4,48 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-export const CAPABILITY_SCHEMA_VERSION = 1;
-export const CAPABILITY_RUNTIME_VERSION = "0.5.1";
-export const DEFAULT_MAX_CONTEXT_BYTES = 12 * 1024;
-export const DEFAULT_MAX_CONTEXT_ITEMS = 12;
+export const CAPABILITY_SCHEMA_VERSION = 2;
+export const CAPABILITY_RUNTIME_VERSION = "0.6.0";
+export const DEFAULT_MAX_CONTEXT_BYTES = 48 * 1024;
+export const DEFAULT_MAX_CONTEXT_ITEMS = 120;
 const DEFAULT_MAX_SKILLS = 180;
 const DEFAULT_MAX_SKILL_DEPTH = 7;
 const MAX_MACHINE_HINT_CHARS = 2200;
 const MAX_PROJECT_EVIDENCE = 16;
 const SKIP_DIRS = new Set(["node_modules", ".git", "data", "sessions"]);
-const GENERIC_SKILL_TOKENS = new Set([
-  "agent", "skill", "tool", "local", "code", "claude", "git", "github", "chatgpt",
-]);
-const QUERY_MATCH_MIN_SCORE = 8;
-const QUERY_STOP_TOKENS = new Set([
-  "the", "and", "for", "with", "without", "from", "into", "this", "that", "these", "those",
-  "use", "using", "do", "does", "did", "not", "no", "yes", "is", "are", "was", "were", "be",
-  "my", "your", "our", "their", "it", "its", "when", "where", "which", "what", "how", "whether",
-  "anything", "something", "please", "determine", "check", "installed", "install", "modify",
-  "read-only", "readonly", "no-network", "offline", "no-mutation",
-  "local", "machine", "capability", "capabilities", "tool", "tools", "skill", "skills",
-]);
-const COMMON_COMMANDS = new Map([
-  ["git", "Git version control CLI"],
-  ["gh", "GitHub CLI"],
-  ["glab", "GitLab CLI"],
-  ["node", "Node.js runtime"],
-  ["npm", "npm package manager"],
-  ["npx", "npm package runner"],
-  ["pnpm", "pnpm package manager"],
-  ["yarn", "Yarn package manager"],
-  ["python", "Python interpreter"],
-  ["python3", "Python interpreter"],
-  ["uv", "Python package and project manager"],
-  ["pytest", "Python pytest test runner"],
-  ["go", "Go toolchain"],
-  ["cargo", "Rust Cargo toolchain"],
-  ["docker", "Docker CLI"],
-  ["wrangler", "Cloudflare Wrangler CLI"],
-  ["pi", "Pi coding agent CLI"],
-  ["codex", "Codex CLI"],
-  ["rg", "ripgrep text search CLI"],
-]);
 
 function byteLength(value) {
   return Buffer.byteLength(value, "utf8");
@@ -355,7 +322,9 @@ function packageManagerFor(workspace, pkg) {
   if (explicit) return explicit;
   if (fs.existsSync(path.join(workspace, "pnpm-lock.yaml"))) return "pnpm";
   if (fs.existsSync(path.join(workspace, "yarn.lock"))) return "yarn";
-  return "npm";
+  if (fs.existsSync(path.join(workspace, "package-lock.json")) ||
+      fs.existsSync(path.join(workspace, "npm-shrinkwrap.json"))) return "npm";
+  return null;
 }
 
 function parsePyprojectScripts(text) {
@@ -406,21 +375,24 @@ export function discoverProjectRecords({ workspace = null, now = new Date().toIS
       incompleteSources.push("project:package.json: invalid JSON");
     } else {
       const pm = packageManagerFor(workspace, pkg);
-      evidence.push({ source: packageJson, fact: `package manager hint: ${pm}` });
+      if (pm) evidence.push({ source: packageJson, fact: `package manager evidence: ${pm}` });
+      else evidence.push({ source: packageJson, fact: "package manager not determined from packageManager or lockfile" });
       if (typeof pkg.packageManager === "string") {
         evidence.push({ source: packageJson, fact: `packageManager declared: ${pkg.packageManager}` });
       }
       const scripts = pkg.scripts && typeof pkg.scripts === "object" ? pkg.scripts : {};
       for (const [name, command] of Object.entries(scripts)) {
         if (typeof command !== "string") continue;
+        const invocation = pm ? `${pm} run ${name}` : null;
         records.push({
           id: commandId("package-script", scope, name, name),
           kind: "command",
-          name: `${pm} run ${name}`,
-          summary: `Project script '${name}' declared in package.json; not executed or environment-verified`,
+          name: `package script: ${name}`,
+          summary: `Project script '${name}' declared in package.json; package manager and runtime availability are evidence-dependent`,
           source: { adapter: "package-script", location: packageJson },
           details: {
-            command: `${pm} run ${name}`,
+            command: invocation,
+            scriptName: name,
             declaredScript: command,
             cwd: workspace,
             launchType: "project-script",
@@ -471,115 +443,12 @@ export function discoverProjectRecords({ workspace = null, now = new Date().toIS
   return { records, evidence, sourcesChecked, incompleteSources };
 }
 
-function queryTerms(value) {
-  const normalized = String(value || "").normalize("NFKC").toLowerCase();
-  return normalized.match(/[\p{L}\p{N}_.-]{2,}/gu) || [];
-}
-
-function relevantQueryTerms(value) {
-  return queryTerms(value).filter(term => term.length >= 3 && !QUERY_STOP_TOKENS.has(term));
-}
-
-function nameTokens(value) {
-  const normalized = String(value || "").normalize("NFKC").toLowerCase();
-  return normalized.match(/[\p{L}\p{N}]{2,}/gu) || [];
-}
-
-function summaryTermIncludes(summary, term) {
-  return /^[\x00-\x7F]+$/.test(term)
-    ? exactWordIncludes(summary, term)
-    : summary.includes(term);
-}
-
-function exactWordIncludes(haystack, needle) {
-  if (!needle) return false;
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^\\p{L}\\p{N}_.-])${escaped}([^\\p{L}\\p{N}_.-]|$)`, "iu").test(haystack);
-}
-
-export function rankCapabilities(query, records) {
-  const q = String(query || "").normalize("NFKC").toLowerCase().trim();
-  if (!q) return records.map((record, index) => ({ record, score: 0, index }));
-  const terms = [...new Set(relevantQueryTerms(q))];
-  return records.map((record, index) => {
-    const name = record.name.toLowerCase();
-    const summary = record.summary.toLowerCase();
-    const nameParts = new Set(nameTokens(name));
-    let score = 0;
-    if (name === q) score += 100;
-    if (q.includes(name) && name.length >= 3) score += 45;
-    if (summary.includes(q) && q.length >= 3) score += 30;
-    for (const term of terms) {
-      if (nameParts.has(term)) score += 16;
-      if (summaryTermIncludes(summary, term)) score += 4;
-    }
-    return { record, score, index };
-  }).sort((a, b) => b.score - a.score || a.record.name.localeCompare(b.record.name) || a.index - b.index);
-}
-
-export function likelySkills(task, skillRecords) {
-  const tokens = new Set(queryTerms(task).filter(token => token.length >= 3));
-  const ranked = skillRecords.map(skill => {
-    const parts = skill.name.toLowerCase().split(/[-_]/)
-      .filter(part => part.length >= 3 && !GENERIC_SKILL_TOKENS.has(part));
-    const phraseMatch = exactWordIncludes(String(task).toLowerCase(), skill.name.toLowerCase());
-    const nameMatches = parts.filter(part => tokens.has(part)).length;
-    let descriptionMatches = 0;
-    for (const token of tokens) {
-      if ((skill.summary || "").toLowerCase().includes(token)) descriptionMatches += 1;
-    }
-    return {
-      skill,
-      phraseMatch,
-      nameMatches,
-      score: (phraseMatch ? 20 : 0) + nameMatches * 10 + descriptionMatches,
-      meaningfulParts: parts.length,
-    };
-  }).sort((a, b) => b.score - a.score || a.skill.id.localeCompare(b.skill.id));
-
-  const top = ranked[0];
-  if (!top || top.score === 0) return [];
-  if (ranked[1]?.score === top.score && ranked[1].skill.name === top.skill.name && ranked[1].skill.id !== top.skill.id) {
-    return [];
-  }
-  if (top.phraseMatch) return [top.skill];
-  if (top.meaningfulParts === 1 && top.nameMatches === 1) return [top.skill];
-  if (top.nameMatches >= 2) return [top.skill];
-  return [];
-}
-
-function extractExplicitCommandCandidates(query) {
-  const q = String(query || "");
-  const values = new Set();
-  const addNaturalCandidate = (value) => {
-    const candidate = String(value || "").toLowerCase();
-    if (!/^[a-z][a-z0-9_.-]{1,63}$/.test(candidate)) return;
-    if (QUERY_STOP_TOKENS.has(candidate)) return;
-    values.add(candidate);
-  };
-
-  const trimmed = q.trim();
-  if (/^[A-Za-z0-9_.-]{2,64}$/.test(trimmed)) values.add(trimmed);
-  for (const match of q.matchAll(/`([A-Za-z0-9_.-]{2,64})`/g)) values.add(match[1]);
-
-  const naturalPatterns = [
-    /\b(?:whether|use|using|run|have|has)\s+([A-Za-z][A-Za-z0-9_.-]{1,63})\b/gi,
-    /\b(?:is|check|find)\s+([A-Za-z][A-Za-z0-9_.-]{1,63})\s+(?:installed|available|present)\b/gi,
-    /\b([A-Za-z][A-Za-z0-9_.-]{1,63})\s+(?:is\s+)?(?:installed|available|present)\b/gi,
-    /\b(?:cli|command|tool)\s+`?([A-Za-z][A-Za-z0-9_.-]{1,63})`?/gi,
-  ];
-  for (const pattern of naturalPatterns) {
-    for (const match of q.matchAll(pattern)) addNaturalCandidate(match[1]);
-  }
-
-  for (const name of COMMON_COMMANDS.keys()) {
-    if (exactWordIncludes(q.toLowerCase(), name.toLowerCase())) values.add(name);
-  }
-  return [...values].slice(0, 8);
+function isSafeCommandName(name) {
+  return /^[A-Za-z0-9_.-]+$/.test(String(name || ""));
 }
 
 function defaultCommandResolver(name) {
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) return [];
+  if (!isSafeCommandName(name)) return [];
   const command = process.platform === "win32" ? "where.exe" : "which";
   const run = spawnSync(command, [name], {
     encoding: "utf8",
@@ -601,18 +470,12 @@ function launchTypeFor(location) {
 }
 
 export function discoverExactCommandRecords({
-  query = "",
-  skillRecords = [],
+  names = [],
   workspace = null,
   resolver = defaultCommandResolver,
   now = new Date().toISOString(),
 } = {}) {
-  const candidates = new Set(extractExplicitCommandCandidates(query));
-  if (query) {
-    for (const skill of likelySkills(query, skillRecords)) {
-      for (const bin of skill.details?.bins || []) candidates.add(bin);
-    }
-  }
+  const candidates = [...new Set(names.map(name => String(name).trim()).filter(isSafeCommandName))].slice(0, 12);
   const records = [];
   const sourcesChecked = [];
   for (const name of candidates) {
@@ -629,7 +492,7 @@ export function discoverExactCommandRecords({
       id: commandId("path", workspace ? projectHash(workspace) : "machine", name, first),
       kind: "command",
       name,
-      summary: COMMON_COMMANDS.get(name) || `Local command '${name}' resolved from the current process environment`,
+      summary: `Local command '${name}' resolved from the current process environment`,
       source: { adapter: "path-command", location: first },
       details: {
         command: name,
@@ -645,7 +508,6 @@ export function discoverExactCommandRecords({
   }
   return { records, sourcesChecked, incompleteSources: [] };
 }
-
 function sanitizeMachineHints(text) {
   const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
   const safe = [];
@@ -666,7 +528,7 @@ function uniqueRecords(records) {
 export function discoverCapabilityRecords({
   home = os.homedir(),
   workspace = null,
-  query = "",
+  commandNames = [],
   skillRoots = null,
   resolver = defaultCommandResolver,
   now = new Date().toISOString(),
@@ -678,7 +540,7 @@ export function discoverCapabilityRecords({
   });
   const project = discoverProjectRecords({ workspace, now });
   const commands = discoverExactCommandRecords({
-    query, skillRecords: skills.records, workspace, resolver, now,
+    names: commandNames, workspace, resolver, now,
   });
   const machineContextPath = path.join(home, ".rdc", "MACHINE_CONTEXT.md");
   const machineHints = sanitizeMachineHints(readTextFile(machineContextPath, 6000));
@@ -704,6 +566,13 @@ export function discoverCapabilityRecords({
 }
 
 function summaryOf(record) {
+  const hints = {};
+  if (record.kind === "skill" && record.details?.bins?.length) {
+    hints.declaredBins = [...record.details.bins];
+  }
+  if (record.kind === "command" && record.details?.command) {
+    hints.command = record.details.command;
+  }
   return {
     id: record.id,
     kind: record.kind,
@@ -711,7 +580,22 @@ function summaryOf(record) {
     summary: record.summary,
     source: record.source,
     observation: record.observation,
+    ...(Object.keys(hints).length ? { hints } : {}),
   };
+}
+
+function catalogPriority(record) {
+  if (record.source?.adapter === "package-script" || record.source?.adapter === "pyproject-script") return 0;
+  if (record.source?.adapter === "path-command") return 1;
+  if (record.kind === "skill") return 2;
+  return 3;
+}
+
+function sortedCatalog(records) {
+  return [...records].sort((a, b) =>
+    catalogPriority(a) - catalogPriority(b) ||
+    a.name.localeCompare(b.name) ||
+    a.id.localeCompare(b.id));
 }
 
 function truncateString(value, maxChars) {
@@ -742,23 +626,26 @@ function fitSnapshot(snapshot, maxBytes) {
   const copy = structuredClone(snapshot);
   copy.machineHints = truncateString(copy.machineHints, MAX_MACHINE_HINT_CHARS);
   copy.projectEvidence = copy.projectEvidence.slice(0, MAX_PROJECT_EVIDENCE);
-  while (byteLength(JSON.stringify(copy)) > maxBytes && copy.capabilities.length > 1) {
-    copy.capabilities.pop();
-    copy.coverage.hasMore = true;
-  }
   while (byteLength(JSON.stringify(copy)) > maxBytes && copy.projectEvidence.length > 0) {
     copy.projectEvidence.pop();
+    copy.coverage.hasMore = true;
+  }
+  if (byteLength(JSON.stringify(copy)) > maxBytes) {
+    copy.machineHints = truncateString(copy.machineHints, 600);
+    copy.coverage.hasMore = true;
+  }
+  while (byteLength(JSON.stringify(copy)) > maxBytes && copy.capabilities.length > 1) {
+    copy.capabilities.pop();
     copy.coverage.hasMore = true;
   }
   if (byteLength(JSON.stringify(copy)) > maxBytes) {
     compactCoverageLists(copy.coverage);
   }
   if (byteLength(JSON.stringify(copy)) > maxBytes) {
-    copy.machineHints = truncateString(copy.machineHints, 600);
+    copy.machineHints = "";
     copy.coverage.hasMore = true;
   }
   if (byteLength(JSON.stringify(copy)) > maxBytes) {
-    copy.machineHints = "";
     copy.capabilities = [];
     copy.coverage.hasMore = true;
   }
@@ -772,28 +659,27 @@ export function buildContextSnapshot({
   home = os.homedir(),
   workspace = null,
   query = "",
+  commandNames = [],
   skillRoots = null,
   resolver = defaultCommandResolver,
   maxItems = DEFAULT_MAX_CONTEXT_ITEMS,
   maxBytes = DEFAULT_MAX_CONTEXT_BYTES,
   now = new Date().toISOString(),
 } = {}) {
-  const discovered = discoverCapabilityRecords({ home, workspace, query, skillRoots, resolver, now });
-  const ranked = rankCapabilities(query, discovered.records);
-  const matched = query
-    ? ranked.filter(item => item.score >= QUERY_MATCH_MIN_SCORE)
-    : ranked;
-  const selected = matched
-    .slice(0, maxItems)
-    .map(item => summaryOf(item.record));
-  const hasMore = matched.length > selected.length || discovered.coverage.incompleteSources.length > 0;
+  const discovered = discoverCapabilityRecords({
+    home, workspace, commandNames, skillRoots, resolver, now,
+  });
+  const catalog = sortedCatalog(discovered.records);
+  const selected = catalog.slice(0, maxItems).map(summaryOf);
+  const hasMore = catalog.length > selected.length || discovered.coverage.incompleteSources.length > 0;
   const snapshot = {
     schemaVersion: CAPABILITY_SCHEMA_VERSION,
     runtimeVersion: CAPABILITY_RUNTIME_VERSION,
     host: { platform: process.platform, arch: process.arch },
     workspace: workspace ? path.resolve(workspace) : null,
     observedAt: discovered.observedAt,
-    query: query || null,
+    task: query || null,
+    semanticSelectionPerformed: false,
     machineHints: discovered.machineHints,
     projectEvidence: discovered.projectEvidence,
     capabilities: selected,
@@ -802,14 +688,15 @@ export function buildContextSnapshot({
       hasMore,
     },
     next: {
-      find: "rdc-cap find <query> --workspace <path>",
+      find: "rdc-cap find <exact-name-or-id> --workspace <path>",
       describe: "rdc-cap describe <capability-id> --workspace <path>",
+      semantic: "how-to-use --workspace <path> <task>",
     },
   };
   return fitSnapshot(snapshot, maxBytes);
 }
 
-export function findCapabilityMatches(query, {
+export function findCapabilityMatches(lookup, {
   home = os.homedir(),
   workspace = null,
   skillRoots = null,
@@ -818,21 +705,35 @@ export function findCapabilityMatches(query, {
   maxBytes = DEFAULT_MAX_CONTEXT_BYTES,
   now = new Date().toISOString(),
 } = {}) {
-  const discovered = discoverCapabilityRecords({ home, workspace, query, skillRoots, resolver, now });
-  const ranked = rankCapabilities(query, discovered.records)
-    .filter(item => item.score >= QUERY_MATCH_MIN_SCORE);
+  const target = String(lookup || "").trim();
+  const commandHint = commandQueryHintFromId(target);
+  const commandNames = isSafeCommandName(target)
+    ? [target]
+    : (commandHint ? [commandHint] : []);
+  const discovered = discoverCapabilityRecords({
+    home, workspace, commandNames, skillRoots, resolver, now,
+  });
+  const lower = target.toLowerCase();
+  const matches = sortedCatalog(discovered.records)
+    .filter(record => record.id === target || record.name.toLowerCase() === lower)
+    .slice(0, maxItems)
+    .map(summaryOf);
   const result = {
     schemaVersion: CAPABILITY_SCHEMA_VERSION,
     runtimeVersion: CAPABILITY_RUNTIME_VERSION,
     observedAt: discovered.observedAt,
     workspace: workspace ? path.resolve(workspace) : null,
-    query: truncateString(query, 1000),
-    matches: ranked.slice(0, maxItems).map(item => ({ ...summaryOf(item.record), score: item.score })),
+    lookup: truncateString(target, 1000),
+    semanticSelectionPerformed: false,
+    matches,
     coverage: {
       ...discovered.coverage,
-      hasMore: ranked.length > maxItems || discovered.coverage.incompleteSources.length > 0,
+      hasMore: discovered.coverage.incompleteSources.length > 0,
     },
-    next: { describe: "rdc-cap describe <capability-id> --workspace <path>" },
+    next: {
+      describe: "rdc-cap describe <capability-id> --workspace <path>",
+      semantic: "how-to-use --workspace <path> <task>",
+    },
   };
   while (byteLength(JSON.stringify(result)) > maxBytes && result.matches.length > 1) {
     result.matches.pop();
@@ -846,14 +747,13 @@ export function findCapabilityMatches(query, {
     result.coverage.hasMore = true;
   }
   if (byteLength(JSON.stringify(result)) > maxBytes) {
-    result.query = truncateString(result.query, 300);
+    result.lookup = truncateString(result.lookup, 300);
   }
   if (byteLength(JSON.stringify(result)) > maxBytes) {
     throw new Error(`capability find result exceeds byte budget (${byteLength(JSON.stringify(result))} > ${maxBytes})`);
   }
   return result;
 }
-
 function commandQueryHintFromId(capabilityId) {
   const match = String(capabilityId || "").match(/^command:path:([a-z0-9._-]{1,48}):[a-f0-9]{10}$/);
   return match?.[1] || "";
@@ -867,10 +767,11 @@ export function describeCapability(capabilityId, {
   now = new Date().toISOString(),
   maxSkillContentChars = 9000,
 } = {}) {
+  const commandHint = commandQueryHintFromId(capabilityId);
   const discovered = discoverCapabilityRecords({
     home,
     workspace,
-    query: commandQueryHintFromId(capabilityId),
+    commandNames: commandHint ? [commandHint] : [],
     skillRoots,
     resolver,
     now,
@@ -929,20 +830,22 @@ function renderContextMarkdownBody(snapshot) {
     lines.push("", "## Project evidence", "");
     for (const item of snapshot.projectEvidence) lines.push(`- ${item.fact} (${item.source})`);
   }
-  lines.push("", "## Relevant capabilities", "");
+  lines.push("", "## Capability catalog (unranked)", "");
+  lines.push("Semantic selection was not performed by rdc-cap; the caller/LLM must reason over these evidence-backed summaries.");
   if (!snapshot.capabilities.length) {
-    lines.push("- No matching capability was found in the bounded sources checked.");
+    lines.push("- No capability records were found in the bounded sources checked.");
   } else {
     for (const item of snapshot.capabilities) {
-      lines.push(`- \`${item.id}\` — **${item.name}** (${item.kind}): ${item.summary}`);
+      const hints = item.hints?.declaredBins?.length ? ` [declared bins: ${item.hints.declaredBins.join(", ")}]` : "";
+      lines.push(`- \`${item.id}\` — **${item.name}** (${item.kind}): ${item.summary}${hints}`);
     }
   }
   lines.push("", "## Coverage", "", `Checked: ${snapshot.coverage.sourcesChecked.join(", ") || "none"}`);
   if (snapshot.coverage.incompleteSources.length) {
     lines.push("", "Incomplete:", markdownList(snapshot.coverage.incompleteSources));
   }
-  if (snapshot.coverage.hasMore) lines.push("", "More candidates or incomplete sources exist; use `rdc-cap find` for a targeted query.");
-  lines.push("", "## Next", "", `- ${snapshot.next.find}`, `- ${snapshot.next.describe}`);
+  if (snapshot.coverage.hasMore) lines.push("", "The catalog is bounded or source coverage is incomplete; absence from this snapshot is not proof of absence.");
+  lines.push("", "## Next", "", `- ${snapshot.next.find}`, `- ${snapshot.next.describe}`, `- ${snapshot.next.semantic}`);
   return lines.join("\n");
 }
 
@@ -993,23 +896,25 @@ export function renderContextMarkdown(snapshot, maxBytes = DEFAULT_MAX_CONTEXT_B
 
 export function renderFindMarkdown(result) {
   const lines = [
-    "# RDC capability matches",
+    "# RDC exact capability lookup",
     "",
-    `Query: ${result.query}`,
+    `Lookup: ${result.lookup}`,
     `Workspace: ${result.workspace || "(machine-level)"}`,
+    "",
+    "Semantic selection was not performed; matches require an exact capability ID or display name.",
     "",
   ];
   if (!result.matches.length) {
-    lines.push("No matching capability was found in the bounded sources checked.");
+    lines.push("No exact capability match was found in the bounded sources checked.");
   } else {
     for (const item of result.matches) {
-      lines.push(`- \`${item.id}\` — **${item.name}** (${item.kind}, score ${item.score}): ${item.summary}`);
+      lines.push(`- \`${item.id}\` — **${item.name}** (${item.kind}): ${item.summary}`);
     }
   }
   if (result.coverage.incompleteSources.length) {
     lines.push("", "Incomplete coverage:", markdownList(result.coverage.incompleteSources));
   }
-  lines.push("", `Next: ${result.next.describe}`);
+  lines.push("", `Next: ${result.next.describe}`, `Semantic routing: ${result.next.semantic}`);
   return lines.join("\n");
 }
 
@@ -1045,7 +950,9 @@ export function renderDescribeMarkdown(result) {
       lines.push("", `Full instructions must be read before execution: ${item.details.readFullPath}`);
     }
   } else {
-    lines.push("", "## Invocation", "", `- command: ${item.details.command}`);
+    lines.push("", "## Invocation", "");
+    if (item.details.command) lines.push(`- command: ${item.details.command}`);
+    else if (item.details.scriptName) lines.push(`- package script: ${item.details.scriptName} (package manager not determined)`);
     if (item.details.cwd) lines.push(`- cwd: ${item.details.cwd}`);
     if (item.details.declaredScript) lines.push(`- declared script: ${item.details.declaredScript}`);
     if (item.details.declaredTarget) lines.push(`- declared target: ${item.details.declaredTarget}`);

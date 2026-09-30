@@ -61,42 +61,59 @@ how-to-use --reconfigure
 how-to-use --verify-config
 how-to-use --benchmark
 how-to-use --self-check
-how-to-use "<bounded task capsule>"
+how-to-use [--workspace <path>] "<bounded task capsule>"
+how-to-use --offline [--workspace <path>] "<task>"
 
-rdc-cap context --workspace <path> [--query <short-task>] [--json]
-rdc-cap find <query> --workspace <path> [--json]
+rdc-cap context --workspace <path> [--query <task-for-provenance>] [--json]
+rdc-cap find <exact-name-or-id> --workspace <path> [--json]
 rdc-cap describe <capability-id> --workspace <path> [--json]
 ```
 
 During source development the discovery CLI can also be run as `node runtime/rdc-cap.mjs ...`. The stable plugin bootstrap must expose the `rdc-cap` command shim when this runtime version is released.
 
-## Deterministic capability discovery
+## Discovery vs semantic routing
 
-`rdc-cap` is intentionally read-only. Its discovery path does not install, download, call the Router model, read Router credentials, start discovered tools, or write runtime/project files.
+`rdc-cap` is intentionally read-only and deterministic. It discovers facts; it does **not** decide which capability is semantically relevant to a natural-language task.
 
 The default discovery domain is bounded to:
 
 - `~/.agents/skills` and `~/.pi/agent/skills`;
 - workspace Skill roots only when root project instructions explicitly reference those roots;
 - `package.json` / `pyproject.toml` declarations in the selected workspace;
-- exact PATH resolution for task-relevant or explicitly queried commands;
+- exact PATH resolution only for an explicitly named command;
 - sanitized durable hints from `~/.rdc/MACHINE_CONTEXT.md`.
 
-It does not scan the Codex plugin cache, enumerate every PATH executable, or recursively inventory the home directory. Symlink/Junction targets may be followed only when they stay inside the set of explicitly allowed Skill roots; canonical paths prevent the same Skill from being registered twice.
+`rdc-cap context` returns an **unranked** capability catalog. The optional `--query` is retained as task/provenance context; it is not tokenized, scored, or used to filter capabilities. `rdc-cap find` is an exact capability-name/ID lookup, not a semantic search endpoint.
 
-`how-to-use` reuses the same Skill discovery module. Normal advisor requests no longer rewrite generated `models.json` / `settings.json`; those files are synchronized by bootstrap/config verification. Tasks that explicitly require read-only/no-mutation or no-network behavior fall back to deterministic local discovery instead of starting the remote advisor.
+Semantic work belongs to an LLM:
+
+1. `how-to-use` sends the bounded unranked catalog, machine hints, project evidence, and task to the configured Router model.
+2. The Router returns structured JSON with selected stable capability IDs, exact CLI names that require verification, normalized task constraints, and a reason.
+3. Runtime code validates IDs and performs exact PATH checks; it never treats an LLM candidate as proof of installation.
+4. A second LLM pass produces advice grounded in the verified descriptors and command-resolution evidence.
+
+There is no stop-word list, lexical score, keyword threshold, regex natural-language CLI extraction, or Skill preselection in the semantic path.
+
+`how-to-use --offline` explicitly disables Router inference and returns only the unranked deterministic catalog. Use it when advisor/control-plane network access itself is prohibited. Natural-language task constraints are otherwise interpreted by the LLM and applied to the target operation; they are not parsed by hand-written keyword rules.
+
+The runtime does not scan the Codex plugin cache, enumerate every PATH executable, or recursively inventory the home directory. Symlink/Junction targets may be followed only when they stay inside the set of explicitly allowed Skill roots; canonical paths prevent the same Skill from being registered twice.
+
+Normal advisor requests do not rewrite generated `models.json` / `settings.json`; those files are synchronized by bootstrap/config verification.
 
 ## Dogfood evidence
 
 Validated on Windows with Pi 0.87.1 and a dedicated Anthropic Messages-compatible Claude Sonnet 4.6 endpoint.
 
-RDC Local Capability Runtime v1 dogfood on 2026-09-29:
+RDC Local Capability Runtime v1 dogfood:
 
-- `node --test runtime/capabilities.test.mjs`: **20 passed, 0 failed**.
-- Live `context --query git` against the real machine Skill roots: 0 incomplete sources after canonical cross-root Junction handling; serialized result remained below the 12 KiB budget.
-- Live `find git -> describe <command-id>` re-resolved the current PATH command and returned `command_resolves`.
-- Runtime 0.5.1 hardening: `read-only no-network determine whether docsify is installed` probes only `command:docsify`; with Docsify absent it returns 0 matches / 0 capabilities / `hasMore=false` and deterministic metadata reports `preselected_skill=none`.
-- A normal Pi-backed `how-to-use` request completed successfully while SHA256 and modification times for generated `models.json` and `settings.json` remained unchanged.
+- Runtime 0.6.0 removes deterministic semantic ranking from the discovery layer.
+- `node --test runtime/capabilities.test.mjs`: **22 passed, 0 failed** during the 0.6.0 refactor.
+- `rdc-cap context` returns an unranked catalog with `semanticSelectionPerformed=false`; natural-language prose does not change which Skill summaries appear.
+- `rdc-cap find` performs exact name/ID lookup and exact command resolution only; natural-language prose does not trigger PATH probes.
+- Package-manager inference now returns unknown when neither `packageManager` nor a supported lockfile provides evidence; npm is no longer an unconditional fallback.
+- Live 0.6.0 Router dogfood on `claude-code-book` selected **no unrelated Skill**, semantically proposed `mdbook/mkdocs/docsify/vitepress/honkit/gitbook/node/npm` as CLI candidates, verified the first six absent and Node/npm present, and recommended project inspection rather than the previous false `review` / `lark-markdown` matches.
+- Positive routing dogfood for a Feishu/Lark Base read task selected stable capability ID `skill:agents:lark-base:9c3a2cf22a`, proposed `lark-cli` for exact PATH verification, verified it, and generated advice from the real Skill instructions.
+- Both live semantic dogfoods completed with `backend=pi model=claude-sonnet-4-6 thinking=xhigh` in about 20 seconds each and performed no project mutation or installation.
 
 Observed benchmark:
 
@@ -125,14 +142,14 @@ The primary ChatGPT agent should launch one `how-to-use` request and keep owners
 
 While an advisor request is running, do not start a second broad inventory of PATH tools, npm globals, Skill roots, home directories, or package trees. Wait for the advisor result, then perform only targeted live verification of claims that matter to the decision.
 
-The router treats task constraints such as read-only, no-install, no-download, no-network, and no-mutation as hard requirements. Options that require a prohibited action must be labeled as future options instead of currently usable paths.
+The Router model interprets task constraints such as read-only, no-install, no-download, no-network, and no-mutation semantically and returns them in a structured decision. Runtime code then uses those constraints as evidence for advice; it does not attempt to understand natural language through regexes or stop-word lists.
 
-Stable user-level capabilities are preferred over private dependencies embedded inside another application's package tree. The router also distinguishes verified capabilities from inferred or future ones and avoids inferring one installed tool merely from the presence of another.
+Stable user-level capabilities are preferred over private dependencies embedded inside another application's package tree. The Router distinguishes verified capabilities from candidates requiring verification, while runtime code owns the actual verification.
 
 A normal successful request emits bounded runtime metadata, for example:
 
 ```text
-[how-to-use] backend=pi model=claude-sonnet-4-6 thinking=xhigh preselected_skill=none elapsed_ms=14530
+[how-to-use] backend=pi model=claude-sonnet-4-6 thinking=xhigh selected_capabilities=none command_candidates=mdbook,mkdocs,docsify,vitepress,node,npm elapsed_ms=19804
 ```
 
-Skill preselection is intentionally conservative: multi-token Skill names require a phrase match or at least two distinctive non-generic name tokens. Generic terms such as `git`, `code`, `claude`, `agent`, `skill`, and `tool` do not by themselves justify preselection.
+There is no deterministic Skill preselection in 0.6.0. Stable capability IDs selected by the LLM are re-resolved before their instructions are used.
