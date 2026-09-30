@@ -293,6 +293,10 @@ async function main() {
   }
   const { model, thinking } = configInfo();
   const workspace = parsed.workspace || process.cwd();
+  console.error("[how-to-use] advisor_running backend=pi" +
+    " agent_loop=native" +
+    " wait_for_pid=true" +
+    " timeout_ms=90000");
   const run = piRun(advisorPrompt(task, workspace), {
     workspace,
     advisorTools:true,
