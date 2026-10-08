@@ -3,9 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { managedSkillLinkRoots } from "./skill-hub-roots.mjs";
 
 export const CAPABILITY_SCHEMA_VERSION = 2;
-export const CAPABILITY_RUNTIME_VERSION = "0.6.2";
+export const CAPABILITY_RUNTIME_VERSION = "0.7.0-dev.2";
 export const DEFAULT_MAX_CONTEXT_BYTES = 48 * 1024;
 export const DEFAULT_MAX_CONTEXT_ITEMS = 120;
 const DEFAULT_MAX_SKILLS = 180;
@@ -262,6 +263,7 @@ export function defaultSkillRoots({ home = os.homedir(), workspace = null } = {}
   return [
     { alias: "agents", path: path.join(home, ".agents", "skills") },
     { alias: "pi", path: path.join(home, ".pi", "agent", "skills") },
+    ...managedSkillLinkRoots({ home }),
     ...adoptedWorkspaceSkillRoots(workspace),
   ];
 }

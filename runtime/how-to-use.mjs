@@ -21,6 +21,8 @@ const SETTINGS_PATH = path.join(AGENT_DIR, "settings.json");
 const STATE_PATH = path.join(ROOT, "backend-state.json");
 const BOOTSTRAP = path.join(ROOT, "bootstrap-router.mjs");
 const ADVISOR_EXTENSION = path.join(RUNTIME_DIR, "pi-capability-tools.ts");
+const FANOUT_EXTENSION = path.join(RUNTIME_DIR, "pi-capability-fanout.ts");
+const ADVISOR_TIMEOUT_MS = 300000;
 const PLACEHOLDER = "REPLACE_WITH_";
 
 function readText(p, max = 20000) {
@@ -98,6 +100,10 @@ function piRun(prompt, opts = {}) {
   const args = ["-NoProfile", "-File", pi, "-p", "--no-session", "--no-context-files", "--no-approve"];
   if (opts.noTools) {
     args.push("--no-tools");
+  } else if (opts.parallelAdvisor) {
+    args.push("--no-extensions");
+    args.push("--extension", ADVISOR_EXTENSION, "--extension", FANOUT_EXTENSION);
+    args.push("--tools", "read,grep,find,ls,capability_fanout,capability_describe,command_resolve");
   } else if (opts.advisorTools) {
     args.push("--extension", ADVISOR_EXTENSION);
     args.push("--tools", "read,grep,find,ls,capability_context,capability_describe,command_resolve");
@@ -115,6 +121,12 @@ function piRun(prompt, opts = {}) {
       PI_CODING_AGENT_DIR:AGENT_DIR,
       PI_SKIP_VERSION_CHECK:"1",
       RDC_ADVISOR_WORKSPACE:workspace,
+      ...(opts.parallelAdvisor ? {
+        RDC_PI_WORKER_SCRIPT:pi,
+        RDC_ADVISOR_WORKER_MODEL:model.id,
+        RDC_ADVISOR_WORKER_THINKING:thinking,
+        RDC_ADVISOR_DEADLINE_MS:String(Date.now() + (opts.timeout || 65000) - 15000),
+      } : {}),
     }
   });
   const ms = Math.round(performance.now() - start);
@@ -195,7 +207,27 @@ function benchmark() {
     benchmark:{ basicMs:basic.ms, schemaMs:schema.ms } };
   writeJson(STATE_PATH, state2);
 }
-function advisorPrompt(task, workspace) {
+function advisorPrompt(task, workspace, parallelAdvisor = false) {
+  if (parallelAdvisor) return [
+    "Task capsule from the primary ChatGPT Web agent:",
+    task,
+    "",
+    "You are Pi Main Advisor. Call capability_fanout exactly once with this task capsule.",
+    "Workers receive every Skill name and full description in their deterministic shard.",
+    "Compare returned original descriptions across shards, then choose useful combinations.",
+    "If any shard failed, disclose incomplete coverage; do not claim a global no-match.",
+    "If moreCandidatesOmitted is true, disclose that workers omitted additional plausible candidates.",
+    "Coverage means descriptions were delivered to Workers, not individually proven understood.",
+    "If none are selected, say no matching candidate was selected from the observed catalog.",
+    "When verifying CLIs, list exact checked names; never claim an exhaustive PATH inventory.",
+    "Do not run business operations, install packages, or change files.",
+    "For shortlisted Skills, read the exact source path if instructions are needed.",
+    "Verify exact CLI names with command_resolve before claiming availability.",
+    "Return concise recommendation, evidence, constraints and coverage status.",
+    "",
+    "WORKSPACE:",
+    workspace || "(machine-level)"
+  ].join("\n");
   return [
     "Task capsule from the primary ChatGPT Web agent:",
     task,
@@ -241,6 +273,7 @@ function parseTaskArgs(args) {
   const rest = [...args];
   let workspace = null;
   let offline = false;
+  let parallelAdvisor = false;
   const workspaceIndex = rest.indexOf("--workspace");
   if (workspaceIndex >= 0) {
     if (workspaceIndex + 1 >= rest.length) throw new Error("--workspace requires a value");
@@ -252,7 +285,13 @@ function parseTaskArgs(args) {
     offline = true;
     rest.splice(offlineIndex, 1);
   }
-  return { task:rest.join(" ").trim(), workspace, offline };
+  const parallelIndex = rest.indexOf("--parallel-advisor");
+  if (parallelIndex >= 0) {
+    parallelAdvisor = true;
+    rest.splice(parallelIndex, 1);
+  }
+  if (offline && parallelAdvisor) throw new Error("--parallel-advisor requires a live Pi model");
+  return { task:rest.join(" ").trim(), workspace, offline, parallelAdvisor };
 }
 
 async function main() {
@@ -267,7 +306,7 @@ async function main() {
   let task = parsed.task;
   if (!task && !process.stdin.isTTY) task = fs.readFileSync(0,"utf8").trim();
   if (!task) {
-    console.error("Usage: how-to-use [--workspace <path>] [--offline] <task> | --bootstrap | --reconfigure | --verify-config | --benchmark | --self-check");
+    console.error("Usage: how-to-use [--workspace <path>] [--offline | --parallel-advisor] <task> | --bootstrap | --reconfigure | --verify-config | --benchmark | --self-check");
     process.exit(2);
   }
 
@@ -296,11 +335,13 @@ async function main() {
   console.error("[how-to-use] advisor_running backend=pi" +
     " agent_loop=native" +
     " wait_for_pid=true" +
-    " timeout_ms=90000");
-  const run = piRun(advisorPrompt(task, workspace), {
+    " timeout_ms=" + ADVISOR_TIMEOUT_MS);
+  const run = piRun(advisorPrompt(task, workspace, parsed.parallelAdvisor), {
     workspace,
     advisorTools:true,
-    timeout:90000,
+    parallelAdvisor:parsed.parallelAdvisor,
+    noSkills:parsed.parallelAdvisor,
+    timeout:ADVISOR_TIMEOUT_MS,
   });
   if (!run.ok) throw new Error("Pi advisor failed: " + run.reason);
 
@@ -309,6 +350,7 @@ async function main() {
     " model=" + model.id +
     " thinking=" + thinking +
     " agent_loop=native" +
+    (parsed.parallelAdvisor ? " capability_advisor=parallel" : " capability_advisor=single") +
     " elapsed_ms=" + Math.round(performance.now() - requestStart));
 }
 main().catch(err => {

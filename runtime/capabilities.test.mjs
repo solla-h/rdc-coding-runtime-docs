@@ -461,3 +461,36 @@ test("Pi advisor extension exposes only narrow read-only capability evidence too
   assert.match(source, /findCapabilityMatches/);
   assert.equal(/spawnSync|execFile|child_process|registerCommand|registerProvider/.test(source), false);
 });
+
+
+test("rdc-cap discovers only verified Skill Hub-owned external links", t => {
+  const home = tempDir(t);
+  const hub = path.join(home, ".agents", "skills");
+  const source = path.join(home, "foreign");
+  const target = path.join(source, "external-demo");
+  writeSkill(source, "external-demo", "external-demo", "Managed external Skill.");
+  fs.mkdirSync(hub, { recursive: true });
+  const link = path.join(hub, "external-demo");
+  try { fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir"); }
+  catch (error) { t.skip("Directory links unavailable: " + error.message); return; }
+  const stateDir = path.join(home, ".rdc", "skill-hub");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "links.json"), JSON.stringify({
+    schema: 1, hub,
+    links: { "external-demo": { target, group: "skill:external-demo", source: "claude" } },
+  }));
+
+  const snapshot = buildContextSnapshot({ home, maxItems: 20 });
+  const matches = snapshot.capabilities.filter(x => x.name === "external-demo");
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].source.root, "agents");
+  assert.deepEqual(snapshot.coverage.incompleteSources, []);
+
+  // A matching ledger entry is not enough: a changed destination is rejected.
+  fs.unlinkSync(link);
+  const changed = writeSkill(home, "changed", "changed-skill", "Different target.");
+  fs.symlinkSync(path.dirname(changed), link, process.platform === "win32" ? "junction" : "dir");
+  const stale = buildContextSnapshot({ home, maxItems: 20 });
+  assert.equal(stale.capabilities.some(x => x.name === "changed-skill"), false);
+  assert.ok(stale.coverage.incompleteSources.some(x => x.includes("outside allowed roots")));
+});
