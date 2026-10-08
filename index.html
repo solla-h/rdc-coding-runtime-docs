@@ -744,7 +744,7 @@
       </a>
 
       <div class="nav-right">
-        <span class="version">v0.6.3</span>
+        <span class="version">v0.6.5</span>
         <nav class="navlinks" aria-label="Page sections">
           <a href="#workflow">Workflow</a>
           <a href="#advisor">Local advisor</a>
@@ -762,7 +762,7 @@
       <div class="wrap hero-grid">
         <div>
           <h1>A disciplined local coding runtime that knows the machine it is using.</h1>
-          <p class="lead">Remote Desktop Commander provides execution. RDC Coding Runtime adds durable machine context, workspace safety, local capability routing, single-owner execution, outcome reconciliation, bounded evidence, validation, and multi-chat concurrency rules.</p>
+          <p class="lead">Remote Desktop Commander provides execution. RDC Coding Runtime adds durable machine context, workspace safety, local capability routing, single-owner execution, bounded observation, outcome reconciliation, validation, and multi-chat concurrency rules.</p>
 
           <div class="actions">
             <a class="button primary" href="#workflow">Read the operating contract</a>
@@ -826,6 +826,10 @@
           <div class="contract-row">
             <strong class="contract-title">Keep one execution owner</strong>
             <p>For long-running, expensive, or effectful work, retain the same device, workspace, command/target, and PID/session until the outcome is settled. Timeout or silence does not authorize a duplicate run.</p>
+          </div>
+          <div class="contract-row">
+            <strong class="contract-title">Observe once, then yield</strong>
+            <p>A later “continue/check” request authorizes one bounded observation cycle for the same owner. If it is still running, report once and yield instead of polling repeatedly in the same turn.</p>
           </div>
           <div class="contract-row">
             <strong class="contract-title">Validate in layers</strong>
@@ -918,7 +922,7 @@ RDC executes</code></pre>
               <li><code>how-to-use --verify-config</code> performs a real inference check.</li>
               <li><code>how-to-use --benchmark</code> verifies basic inference, Skill routing, and multi-tool/schema reasoning.</li>
             </ol>
-            <p><code>pi-agent/models.json</code> and <code>settings.json</code> are generated runtime files. The user-facing source of truth remains <code>~/.rdc/how-to-use/config.json</code>.</p>
+            <p><code>pi-agent/models.json</code> and <code>settings.json</code> are generated runtime files. The user-facing source of truth remains <code>~/.rdc/how-to-use/config.json</code>. The ChatGPT Plugin/Skill release and local <code>rdc-cap/how-to-use</code> runtime use independent version numbers; a newer Plugin does not by itself make the pinned local runtime stale.</p>
           </div>
         </div>
       </div>
@@ -967,8 +971,8 @@ start_process(command="...")
           </div>
           <div class="rail-item">
             <span class="rail-time">~1–3 min</span>
-            <h3>Observe sparingly</h3>
-            <p>Use at most a small number of targeted reads. Do not turn progress into a polling loop.</p>
+            <h3>One observation cycle</h3>
+            <p>On a later status request, read the same owner once; if liveness is still ambiguous, use at most one status-only check. If it remains running, report and yield.</p>
           </div>
           <div class="rail-item">
             <span class="rail-time">&gt; 3 min</span>
@@ -978,7 +982,7 @@ start_process(command="...")
         </div>
 
         <div class="notice">
-          <strong>Do not duplicate unresolved work</strong> because ChatGPT stopped updating, a tool call timed out, or transport failed. Reconcile the original PID/session or mutation target first; unresolved effectful work remains <code>OUTCOME_UNKNOWN</code>.
+          <strong>Do not duplicate or continuously poll unresolved work.</strong> Reconcile the original PID/session or mutation target first. One user status request means one observation cycle; unresolved effectful work remains <code>OUTCOME_UNKNOWN</code>.
         </div>
       </div>
     </section>
@@ -1039,7 +1043,7 @@ read_process_output(pid=1234, offset=0)</code></pre>
       <div class="wrap">
         <div class="section-head">
           <h2>Recovery starts with evidence</h2>
-          <p>A new conversation should reconcile current machine facts instead of inheriting stale branch, shell, process, or dirty-state assumptions.</p>
+          <p>A new conversation should reconcile current machine facts instead of inheriting stale branch, shell, process, or dirty-state assumptions. For effectful work, report <code>process_exit</code> separately from <code>effect_state</code>: an abnormal exit can coexist with an applied effect, and a missing receipt does not prove no effect.</p>
         </div>
 
         <div class="recovery">
@@ -1111,6 +1115,16 @@ OUTCOME_UNKNOWN</code>
         </div>
 
         <div class="timeline">
+          <div class="release">
+            <div class="release-tag">0.6.5</div>
+            <strong class="release-title">Process and effect evidence</strong>
+            <p>Reports process exit and the observed effect separately, preserving uncertainty when effects are incomplete.</p>
+          </div>
+          <div class="release">
+            <div class="release-tag">0.6.4</div>
+            <strong class="release-title">Bounded observation + version namespace clarity</strong>
+            <p>Fresh-session dogfood kept one execution owner but revealed repeated same-turn polling and confusion between Plugin and local-runtime versions. 0.6.4 makes each later status request one observation cycle and explicitly treats component versions as independent.</p>
+          </div>
           <div class="release">
             <div class="release-tag">0.6.3</div>
             <strong class="release-title">Execution ownership + outcome reconciliation</strong>
