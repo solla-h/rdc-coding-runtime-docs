@@ -21,6 +21,7 @@ const SETTINGS_PATH = path.join(AGENT_DIR, "settings.json");
 const STATE_PATH = path.join(ROOT, "backend-state.json");
 const BOOTSTRAP = path.join(ROOT, "bootstrap-router.mjs");
 const ADVISOR_EXTENSION = path.join(RUNTIME_DIR, "pi-capability-tools.ts");
+const ADVISOR_TIMEOUT_MS = 300000;
 const PLACEHOLDER = "REPLACE_WITH_";
 
 function readText(p, max = 20000) {
@@ -296,11 +297,11 @@ async function main() {
   console.error("[how-to-use] advisor_running backend=pi" +
     " agent_loop=native" +
     " wait_for_pid=true" +
-    " timeout_ms=90000");
+    " timeout_ms=" + ADVISOR_TIMEOUT_MS);
   const run = piRun(advisorPrompt(task, workspace), {
     workspace,
     advisorTools:true,
-    timeout:90000,
+    timeout:ADVISOR_TIMEOUT_MS,
   });
   if (!run.ok) throw new Error("Pi advisor failed: " + run.reason);
 

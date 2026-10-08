@@ -2,7 +2,7 @@
 
 This directory contains the local runtime used by the RDC Coding Runtime plugin's `how-to-use` capability advisor.
 
-Current compatibility: ChatGPT Plugin `0.6.5` continues to use local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions: Plugin `0.6.5` clarifies process-exit versus effect-state reconciliation and safe retry policy; it does not add or change a local Runtime state machine.
+Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions. **This development branch contains a not-yet-installed local runtime candidate `0.7.0-dev.1`** with Skill Hub discovery and planning. It does not modify the stable pin, user's installed runtime, or Plugin release.
 
 ## Files
 
@@ -12,6 +12,11 @@ Current compatibility: ChatGPT Plugin `0.6.5` continues to use local capability 
 - `lib/capabilities.mjs` — shared bounded discovery and projection module used by both the CLI and Pi extension.
 - `bootstrap-router.mjs` — creates or migrates the dedicated router configuration and opens it for user editing.
 - `capabilities.test.mjs` — source-level regression coverage; it is not required in the installed runtime.
+- `skill-hub.mjs` — `plan` (read-only), `shard` (read-only), and `sync` (owned links only).
+- `lib/skill-hub.mjs` — deterministic source inventory, bundle-level version choice and managed Junction/symlink reconciliation.
+- `lib/skill-hub-roots.mjs` — verifies managed link targets before allowing `rdc-cap` discovery.
+- `lib/capability-shards.mjs` — deterministic, full-coverage 256 KiB candidate metadata partitioning.
+- `skill-hub.test.mjs` — isolated link, bundle, ownership, and 5,000-item shard regression coverage.
 
 ## Local layout
 
@@ -101,9 +106,34 @@ There is no stop-word list, lexical score, keyword threshold, regex natural-lang
 
 `how-to-use --offline` explicitly disables Router inference and returns only the unranked deterministic catalog. Use it when advisor/control-plane network access itself is prohibited. Natural-language task constraints are otherwise interpreted by the LLM and applied to the target operation; they are not parsed by hand-written keyword rules.
 
-The runtime does not scan the Codex plugin cache, enumerate every PATH executable, or recursively inventory the home directory. Symlink/Junction targets may be followed only when they stay inside the set of explicitly allowed Skill roots; canonical paths prevent the same Skill from being registered twice.
+The runtime does not enumerate every PATH executable or recursively inventory the home directory. Symlink/Junction targets may be followed only when they stay inside explicitly allowed Skill roots. In the `0.7.0-dev.1` candidate, an additional **exact allowlist** is derived from Skill Hub-owned links whose live target matches the ownership ledger. Other external links remain excluded. `rdc-cap` does not scan arbitrary Codex plugin caches.
 
 Normal advisor requests do not rewrite generated `models.json` / `settings.json`; those files are synchronized by bootstrap/config verification.
+
+## Skill Hub candidate (0.7.0-dev.1)
+
+The preferred user-owned global location for **new local installs** is `~/.agents/skills/`. Existing client-managed installations remain in place. The Hub creates Windows Junctions (directory symlinks elsewhere), not copies, for missing global names. It does not install/uninstall packages or modify any source Skill.
+
+Developer entrypoints (not yet installed as a user-level shim):
+
+```powershell
+node runtime/skill-hub.mjs plan
+node runtime/skill-hub.mjs plan --json
+node runtime/skill-hub.mjs shard --target-bytes 262144 --parallelism 4 --json
+node runtime/skill-hub.mjs sync
+```
+
+`plan` and `shard` are **read-only**. `sync` must be explicitly invoked; neither `rdc-cap` nor `how-to-use` invokes it automatically. Before syncing a real machine, inspect the proposed action list. For isolated tests, supply `--home <fixture>` and repeated `--source alias=path` options; explicit sources replace the default external source list. Optional `--groups file.json` supports `{"bundles":{"bundle-name":["skill-a","skill-b"]}}` for a group without install manifests.
+
+Default global sources: `~/.agents/skills` (hub), `~/.pi/agent/skills`, `~/.claude/skills`, `~/.codex/skills` (excluding client `.system` Skills), `~/.kiro/skills`, and the `skills/` directory of each currently **enabled and installed** Claude Code plugin. Project-scoped Skills are deliberately not promoted globally. Unreadable/invalid source metadata blocks sync rather than silently shrinking the catalog.
+
+Version choice is deterministic: identical **Skill directory content** is treated as equal regardless of copied file modification times, preferring an existing hub copy. Different content uses the newest file modification time across the entire Skill directory, with deterministic source tie-breaking. Client-targeted `.*-install.json` files are excluded from content fingerprints; their `installedVersion` / `buildCommit` identify release families. Skills sharing the same install-manifest family (e.g. the 13 TWG Skills) are selected **from one source installation as a complete group**, never per-file across clients. Invalid mixed release manifests block sync. For unmanaged hub directories with genuinely different content, `plan` reports a conflict rather than deleting user data.
+
+The syncer only replaces or removes its **own** unchanged links and persists ownership in `~/.rdc/skill-hub/links.json`. A changed real directory or redirected link is never overwritten. A lock file prevents concurrent syncs. Ledger updates occur after each successful action so a partial filesystem failure remains reconcilable. An external link becomes readable by `rdc-cap` only if the ledger, live link, and original target agree. Arbitrary external links are not allowed.
+
+`shard` uses the fully selected descriptions, stable hub IDs, source locations, and content fingerprints; it does not score, embed, semantically prefilter, or truncate candidates. The default is **262,144 UTF-8 bytes per shard** with `--parallelism 4`. An indivisible oversized item is retained intact and flagged. JSON output contains per-shard items for future Pi Workers; this P0/P1 slice **does not yet spawn parallel Pi subagents**. The development launcher has a 300,000 ms root advisory timeout; the installed 0.6.2 launcher retains its old limit until a separately reviewed release.
+
+Test with: `node --test runtime/skill-hub.test.mjs runtime/capabilities.test.mjs`. Do not run `sync` against the user's real hub as a side effect of testing or bootstrapping.
 
 ## Dogfood evidence
 
@@ -152,7 +182,7 @@ While that PID is active, do not start `Get-Command`/PATH scans, npm-global scan
 The launcher emits an immediate progress marker before entering the blocking native Pi run:
 
 ```text
-[how-to-use] advisor_running backend=pi agent_loop=native wait_for_pid=true timeout_ms=90000
+[how-to-use] advisor_running backend=pi agent_loop=native wait_for_pid=true timeout_ms=300000
 ```
 
 Treat `wait_for_pid=true` as an explicit control-plane gate: do not duplicate capability investigation while the owning PID is alive.
