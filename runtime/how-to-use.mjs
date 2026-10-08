@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { buildParallelAdvisorPrompt } from "./lib/pi-advisor-decision.mjs";
 import { fileURLToPath } from "node:url";
 import {
   buildContextSnapshot,
@@ -101,7 +102,7 @@ function piRun(prompt, opts = {}) {
   if (opts.noTools) {
     args.push("--no-tools");
   } else if (opts.parallelAdvisor) {
-    args.push("--no-extensions");
+    args.push("--no-mcp", "--no-extensions");
     args.push("--extension", ADVISOR_EXTENSION, "--extension", FANOUT_EXTENSION);
     args.push("--tools", "read,grep,find,ls,capability_fanout,capability_describe,command_resolve");
   } else if (opts.advisorTools) {
@@ -208,26 +209,7 @@ function benchmark() {
   writeJson(STATE_PATH, state2);
 }
 function advisorPrompt(task, workspace, parallelAdvisor = false) {
-  if (parallelAdvisor) return [
-    "Task capsule from the primary ChatGPT Web agent:",
-    task,
-    "",
-    "You are Pi Main Advisor. Call capability_fanout exactly once with this task capsule.",
-    "Workers receive every Skill name and full description in their deterministic shard.",
-    "Compare returned original descriptions across shards, then choose useful combinations.",
-    "If any shard failed, disclose incomplete coverage; do not claim a global no-match.",
-    "If moreCandidatesOmitted is true, disclose that workers omitted additional plausible candidates.",
-    "Coverage means descriptions were delivered to Workers, not individually proven understood.",
-    "If none are selected, say no matching candidate was selected from the observed catalog.",
-    "When verifying CLIs, list exact checked names; never claim an exhaustive PATH inventory.",
-    "Do not run business operations, install packages, or change files.",
-    "For shortlisted Skills, read the exact source path if instructions are needed.",
-    "Verify exact CLI names with command_resolve before claiming availability.",
-    "Return concise recommendation, evidence, constraints and coverage status.",
-    "",
-    "WORKSPACE:",
-    workspace || "(machine-level)"
-  ].join("\n");
+  if (parallelAdvisor) return buildParallelAdvisorPrompt(task, workspace);
   return [
     "Task capsule from the primary ChatGPT Web agent:",
     task,

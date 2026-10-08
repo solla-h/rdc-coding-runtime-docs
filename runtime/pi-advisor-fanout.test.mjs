@@ -8,6 +8,7 @@ import {
   invokePiWorker, runParallelAdvisor,
 } from "./lib/pi-advisor-fanout.mjs";
 import { shardCapabilities } from "./lib/capability-shards.mjs";
+import { buildParallelAdvisorPrompt } from "./lib/pi-advisor-decision.mjs";
 
 function catalog(count, descriptionLength = 500) {
   return Array.from({ length: count }, (_, i) => ({
@@ -47,7 +48,7 @@ test("worker invocation is isolated and its large prompt is passed via stdin", (
   });
   const args = invoke.args.join(" ");
   assert.equal(invoke.command, "pwsh.exe");
-  for (const flag of ["--no-session", "--no-skills", "--no-extensions",
+  for (const flag of ["--no-session", "--no-skills", "--no-extensions", "--no-mcp",
     "--no-context-files", "--no-tools", "--no-approve", "--mode json"]) {
     assert.ok(args.includes(flag), flag);
   }
@@ -218,4 +219,50 @@ test("an aborted worker is not retried and is explicitly incomplete", async () =
   assert.equal(result.status, "failed");
   assert.equal(result.coverage.missingShards.length, p.shardCount);
   assert.ok(result.results.every(x => x.error === "aborted"));
+});
+
+
+test("Main treats Skill shortlist as conditional evidence and evaluates native no-Skill solutions", () => {
+  const examples = [
+    "Preview a book chapter without installing software or running servers",
+    "Inspect an existing local CSV without adding any packages",
+    "Recommend how to examine an already configured internal Base, without executing it",
+  ];
+  for (const task of examples) {
+    const prompt = buildParallelAdvisorPrompt(task, "C:/work");
+    assert.ok(prompt.includes(task));
+    assert.match(prompt, /call capability_fanout exactly once/i);
+    assert.match(prompt, /no Skill/i);
+    assert.match(prompt, /success condition/i);
+    assert.match(prompt, /command_resolve/);
+    assert.match(prompt, /does NOT mean all installed local programs/i);
+    assert.match(prompt, /verification|verified/i);
+    assert.match(prompt, /shard failed/i);
+    assert.match(prompt, /user's hard constraints/i);
+    assert.match(prompt, /primary ChatGPT owns effectful execution/i);
+  }
+  assert.throws(() => buildParallelAdvisorPrompt("  "), /nonempty/i);
+});
+
+test("Worker relevance is not treated as proof of runtime readiness", () => {
+  const p = shardCapabilities(catalog(2, 800), { targetBytes: 16000, parallelism: 1 });
+  const prompt = buildWorkerPrompt(
+    "Find a way to preview local Markdown without a browser extension", p.shards[0],
+  );
+  assert.match(prompt, /actual user success conditions/i);
+  assert.match(prompt, /unverified dependency/i);
+  assert.match(prompt, /no candidates/i);
+  assert.ok(!prompt.includes("Use lexical matching"));
+});
+
+test("source launcher keeps opt-in parallel isolation and existing single-Pi mode", () => {
+  const source = fs.readFileSync(
+    new URL("./how-to-use.mjs", import.meta.url), "utf8",
+  );
+  assert.match(source, /--parallel-advisor/);
+  assert.match(source, /buildParallelAdvisorPrompt/);
+  assert.match(source, /args\.push\("--no-mcp", "--no-extensions"\)/);
+  assert.match(source, /advisorTools:true/);
+  assert.match(source, /noSkills:parsed\.parallelAdvisor/);
+  assert.match(source, /ADVISOR_TIMEOUT_MS = 300000/);
 });
