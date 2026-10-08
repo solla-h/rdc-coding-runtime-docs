@@ -1,4 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
+import { describeHubSelectedSkill } from "./lib/skill-hub-describe.mjs";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   buildContextSnapshot,
@@ -36,12 +37,17 @@ const capabilityContext = defineTool({
 const capabilityDescribe = defineTool({
   name: "capability_describe",
   label: "Describe capability",
-  description: "Re-resolve one exact stable capability ID and return its current evidence and instructions. Use only IDs obtained from capability_context.",
+  description: "Re-resolve one exact capability ID and return current instructions. Supports IDs from capability_context and exact virtual skill:hub:<name> IDs returned by capability_fanout. This performs no semantic lookup.",
   parameters: Type.Object({
     id: Type.String({ description: "Exact stable capability ID" }),
   }),
   async execute(_callId, params, _signal, _update, ctx) {
     const workspace = workspaceFrom(ctx);
+    if (/^skill:hub:/i.test(params.id)) {
+      return textResult(describeHubSelectedSkill(params.id, {
+        maxSkillContentChars: 18000,
+      }));
+    }
     return textResult(describeCapability(params.id, {
       workspace,
       maxSkillContentChars: 18000,

@@ -2,7 +2,7 @@
 
 This directory contains the local runtime used by the RDC Coding Runtime plugin's `how-to-use` capability advisor.
 
-Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions. **This development branch contains a not-yet-installed local runtime candidate `0.7.0-dev.3`** with Skill Hub planning and opt-in parallel Pi advising. It does not modify the stable pin, user's installed runtime, or Plugin release.
+Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions. **This development branch contains a not-yet-installed local runtime candidate `0.7.0-dev.4`** with Skill Hub planning and opt-in parallel Pi advising. It does not modify the stable pin, user's installed runtime, or Plugin release.
 
 ## Files
 
@@ -20,6 +20,8 @@ Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local ca
 - `pi-capability-fanout.ts` — opt-in Pi Main tool that plans shards and dispatches ephemeral Workers.
 - `lib/pi-advisor-fanout.mjs` — bounded concurrent Pi process scheduler, worker result validation and coverage reporting.
 - `pi-advisor-fanout.test.mjs` — worker process, structured output, concurrency and failure-path regressions.
+- `lib/skill-hub-describe.mjs` — exact re-resolution of `skill:hub:<name>` virtual IDs using the selected original file; no fuzzy matching or automatic sync.
+- `evaluation/` — P3 test matrix, isolated multi-shard Pi Main fixture, and gated real-model dogfood.
 
 ## Local layout
 
@@ -198,14 +200,31 @@ Quality regression originating this change: for a local Markdown book requiring
 graphical rendered preview with no installation or server, a prior run recommended
 `browser-skill` despite lacking evidence that the browser could render Markdown.
 A direct built-in editor preview is a better candidate when its CLI is verified.
-Tests cover the decision contract and source compatibility; real Pi quality
-must be assessed separately. P3's first live run uses RDC owner PID `21588`
-and was still pending at the time this section was drafted; do not mark PASS
-based solely on the process being started.
+Real Pi validation on 2026-10-08: inherited owner PID `21588` exited 0 and selected the native VS Code Markdown Preview instead of conditional browser Skills, with 97 Skills/1 shard. Follow-up PID `25736` exited 0 and selected `lark-base` + `lark-cli` for read-only Feishu Base record advice, preserving authentication uncertainty. See `evaluation/README.md` for the full P3 acceptance matrix and remaining tests.
 
 Validation: `node --test runtime/capabilities.test.mjs runtime/skill-hub.test.mjs runtime/pi-advisor-fanout.test.mjs`
 has **57 PASS / 0 FAIL** for this source iteration. The stable local runtime
 remains `0.6.2`; the ChatGPT Plugin remains `0.6.5`. No Skill Hub `sync` was run.
+
+### P3 follow-up: virtual Hub ID lookup (0.7.0-dev.4)
+
+Live Feishu Base advisory exposed a contract mismatch: worker results contain
+`skill:hub:<name>` while the older `capability_describe` tool only accepted
+legacy `rdc-cap` source-scoped IDs. Consequently a real selected Skill was
+reported as `found:false` even though its source SKILL.md was readable.
+
+`capability_describe` now handles exact virtual IDs by recomputing the
+current read-only Skill Hub selection, matching exactly one selected name,
+and returning that source's bounded SKILL.md plus provenance. If the Hub
+plan is incomplete or blocked, it returns `found:false` and the cause.
+Invalid/path-like IDs are rejected; no fuzzy matching, Skill execution, or
+Hub link synchronization occurs. Legacy ID resolution remains unchanged.
+
+The related 2026-10-08 P3 evaluation harness is under `runtime/evaluation/`.
+It uses four synthetic capability descriptions in two deliberately small
+test-only shards; the **production 256 KiB shard target is unchanged**.
+Model-driven tests require `--execute-once` and are not part of the
+ordinary `node --test` unit suite. The installed runtime remains `0.6.2`.
 
 ---
 
