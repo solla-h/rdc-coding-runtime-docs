@@ -2,7 +2,7 @@
 
 This directory contains the local runtime used by the RDC Coding Runtime plugin's `how-to-use` capability advisor.
 
-Current compatibility: ChatGPT Plugin `0.6.4` continues to use local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions: Plugin `0.6.4` tightens execution-observation and version-interpretation policy only; it does not add or change a local Runtime state machine.
+Current compatibility: ChatGPT Plugin `0.6.5` continues to use local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions: Plugin `0.6.5` clarifies process-exit versus effect-state reconciliation and safe retry policy; it does not add or change a local Runtime state machine.
 
 ## Files
 

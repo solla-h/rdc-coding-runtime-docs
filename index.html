@@ -744,7 +744,7 @@
       </a>
 
       <div class="nav-right">
-        <span class="version">v0.6.4</span>
+        <span class="version">v0.6.5</span>
         <nav class="navlinks" aria-label="Page sections">
           <a href="#workflow">Workflow</a>
           <a href="#advisor">Local advisor</a>
@@ -1043,7 +1043,7 @@ read_process_output(pid=1234, offset=0)</code></pre>
       <div class="wrap">
         <div class="section-head">
           <h2>Recovery starts with evidence</h2>
-          <p>A new conversation should reconcile current machine facts instead of inheriting stale branch, shell, process, or dirty-state assumptions.</p>
+          <p>A new conversation should reconcile current machine facts instead of inheriting stale branch, shell, process, or dirty-state assumptions. For effectful work, report <code>process_exit</code> separately from <code>effect_state</code>: an abnormal exit can coexist with an applied effect, and a missing receipt does not prove no effect.</p>
         </div>
 
         <div class="recovery">
@@ -1115,6 +1115,11 @@ OUTCOME_UNKNOWN</code>
         </div>
 
         <div class="timeline">
+          <div class="release">
+            <div class="release-tag">0.6.5</div>
+            <strong class="release-title">Process and effect evidence</strong>
+            <p>Reports process exit and the observed effect separately, preserving uncertainty when effects are incomplete.</p>
+          </div>
           <div class="release">
             <div class="release-tag">0.6.4</div>
             <strong class="release-title">Bounded observation + version namespace clarity</strong>
