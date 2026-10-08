@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { buildParallelAdvisorPrompt } from "./lib/pi-advisor-decision.mjs";
 import { fileURLToPath } from "node:url";
 import {
+  CAPABILITY_RUNTIME_VERSION,
   buildContextSnapshot,
   discoverSkillRecords,
   renderContextMarkdown,
@@ -276,8 +277,21 @@ function parseTaskArgs(args) {
   return { task:rest.join(" ").trim(), workspace, offline, parallelAdvisor };
 }
 
+function usage() {
+  return "Usage: how-to-use [--workspace <path>] [--offline | --parallel-advisor] <task> | --bootstrap | --reconfigure | --verify-config | --benchmark | --self-check | --help | --version";
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h") ||
+      (args.length === 1 && args[0] === "help")) {
+    console.log(usage());
+    return;
+  }
+  if (args.length === 1 && ["-V", "--version"].includes(args[0])) {
+    console.log("how-to-use " + CAPABILITY_RUNTIME_VERSION);
+    return;
+  }
   if (args.includes("--bootstrap")) return runBootstrap(false);
   if (args.includes("--reconfigure")) return runBootstrap(true);
   if (args.includes("--verify-config")) return await verifyConfig();
@@ -288,7 +302,7 @@ async function main() {
   let task = parsed.task;
   if (!task && !process.stdin.isTTY) task = fs.readFileSync(0,"utf8").trim();
   if (!task) {
-    console.error("Usage: how-to-use [--workspace <path>] [--offline | --parallel-advisor] <task> | --bootstrap | --reconfigure | --verify-config | --benchmark | --self-check");
+    console.error(usage());
     process.exit(2);
   }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
 import {
+  CAPABILITY_RUNTIME_VERSION,
   buildContextSnapshot,
   describeCapability,
   findCapabilityMatches,
@@ -48,6 +49,10 @@ function print(value, asJson, renderer) {
 }
 
 function main() {
+  if (process.argv.length === 3 && ["--version", "-V"].includes(process.argv[2])) {
+    console.log("rdc-cap " + CAPABILITY_RUNTIME_VERSION);
+    return;
+  }
   const parsed = parseArgs(process.argv.slice(2));
   if (!parsed.command || ["-h", "--help", "help"].includes(parsed.command)) {
     console.log(usage());

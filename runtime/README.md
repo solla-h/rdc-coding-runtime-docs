@@ -2,7 +2,7 @@
 
 This directory contains the local runtime used by the RDC Coding Runtime plugin's `how-to-use` capability advisor.
 
-Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions. **This development branch contains a not-yet-installed local runtime candidate `0.7.0-dev.4`** with Skill Hub planning and opt-in parallel Pi advising. It does not modify the stable pin, user's installed runtime, or Plugin release.
+P4 preview currently tested on Windows: ChatGPT Plugin `0.7.0-preview.2` and installed local capability runtime `0.7.0-dev.4` pinned to `main@0f528c7c701e3fdd6886a6c467fac4836822685a`. These are independent component versions. **This branch adds source candidate `0.7.0-dev.5`** with model-free CLI introspection. The existing installed preview, its rollback backup, Router configuration, Skill Hub links, and Plugin release are not modified by this repository change.
 
 ## Files
 
@@ -75,12 +75,19 @@ how-to-use --reconfigure
 how-to-use --verify-config
 how-to-use --benchmark
 how-to-use --self-check
+how-to-use --help
+how-to-use --version
 how-to-use [--workspace <path>] "<bounded task capsule>"
 how-to-use --offline [--workspace <path>] "<task>"
 
 rdc-cap context --workspace <path> [--query <task-for-provenance>] [--json]
 rdc-cap find <exact-name-or-id> --workspace <path> [--json]
 rdc-cap describe <capability-id> --workspace <path> [--json]
+rdc-cap --help
+rdc-cap --version
+
+node runtime/skill-hub.mjs --help
+node runtime/skill-hub.mjs --version
 ```
 
 During source development the discovery CLI can also be run as `node runtime/rdc-cap.mjs ...`. The stable plugin bootstrap must expose the `rdc-cap` command shim when this runtime version is released.
@@ -225,6 +232,28 @@ It uses four synthetic capability descriptions in two deliberately small
 test-only shards; the **production 256 KiB shard target is unchanged**.
 Model-driven tests require `--execute-once` and are not part of the
 ordinary `node --test` unit suite. The complete isolated test suite passed **65/65**. Real source read-only lookup of `skill:hub:lark-shared` returned `found:true`, the selected original SKILL.md, and zero incomplete sources. The installed runtime remains `0.6.2`.
+
+---
+
+### P4: zero-cost CLI inspection (`0.7.0-dev.5`)
+
+During a browser-operated fresh ChatGPT session, the agent tried to inspect
+`rdc-cap --version` (previously an error) and `how-to-use --help` (previously
+misinterpreted as a semantic task and launched Pi with a 300-second owner).
+These ordinary CLI inspection operations must never spend model tokens.
+
+The three user-facing local entrypoints (`how-to-use`, `rdc-cap`, and
+`skill-hub.mjs`) now support `--help` and `--version`, plus the respective
+documented aliases. Introspection occurs before Router config lookup, model
+selection, Skill inventory or filesystem mutation. A simple exact flag
+returns usage or the local runtime version immediately. Normal capability
+recommendation remains a separate explicit task.
+
+Test with `node --test runtime/cli-introspection.test.mjs`: the suite verifies
+each executable in an isolated home, confirms no creation of Router state,
+and rejects an ordinary semantic task without a validated Pi backend.
+This candidate is source-only until independently reviewed; the installed
+P4 preview remains `0.7.0-dev.4`.
 
 ---
 
