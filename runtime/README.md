@@ -2,7 +2,7 @@
 
 This directory contains the local runtime used by the RDC Coding Runtime plugin's `how-to-use` capability advisor.
 
-Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions. **This development branch contains a not-yet-installed local runtime candidate `0.7.0-dev.2`** with Skill Hub planning and opt-in parallel Pi advising. It does not modify the stable pin, user's installed runtime, or Plugin release.
+Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions. **This development branch contains a not-yet-installed local runtime candidate `0.7.0-dev.3`** with Skill Hub planning and opt-in parallel Pi advising. It does not modify the stable pin, user's installed runtime, or Plugin release.
 
 ## Files
 
@@ -109,11 +109,11 @@ There is no stop-word list, lexical score, keyword threshold, regex natural-lang
 
 `how-to-use --offline` explicitly disables Router inference and returns only the unranked deterministic catalog. Use it when advisor/control-plane network access itself is prohibited. Natural-language task constraints are otherwise interpreted by the LLM and applied to the target operation; they are not parsed by hand-written keyword rules.
 
-The runtime does not enumerate every PATH executable or recursively inventory the home directory. Symlink/Junction targets may be followed only when they stay inside explicitly allowed Skill roots. In the `0.7.0-dev.1` candidate, an additional **exact allowlist** is derived from Skill Hub-owned links whose live target matches the ownership ledger. Other external links remain excluded. `rdc-cap` does not scan arbitrary Codex plugin caches.
+The runtime does not enumerate every PATH executable or recursively inventory the home directory. Symlink/Junction targets may be followed only when they stay inside explicitly allowed Skill roots. Starting with the `0.7.0-dev.1` candidate, an additional **exact allowlist** is derived from Skill Hub-owned links whose live target matches the ownership ledger. Other external links remain excluded. `rdc-cap` does not scan arbitrary Codex plugin caches.
 
 Normal advisor requests do not rewrite generated `models.json` / `settings.json`; those files are synchronized by bootstrap/config verification.
 
-## Skill Hub candidate (0.7.0-dev.1)
+## Skill Hub candidate (introduced in 0.7.0-dev.1)
 
 The preferred user-owned global location for **new local installs** is `~/.agents/skills/`. Existing client-managed installations remain in place. The Hub creates Windows Junctions (directory symlinks elsewhere), not copies, for missing global names. It does not install/uninstall packages or modify any source Skill.
 
@@ -158,7 +158,7 @@ Implementation specifics:
 - Data: Skill Hub planning is performed in-memory and read-only. This mode never invokes the Hub's `sync` command. Pi Workers cannot execute source Skills or local business CLIs.
 - Test coverage: see `runtime/pi-advisor-fanout.test.mjs` for Windows process stdin, parallel scheduling, output validation, error/coverage handling and 5,000-item deterministic shard fixtures.
 
-This is a **development-only experiment**. Before considering a Runtime/Plugin release, it still needs repeated end-to-end fresh-session selection-quality evaluation, cancellation/Windows descendant-process verification, and cost/latency benchmarks against single-Pi behavior. It does not add MCP discovery or Jev/embedding/keyword routing.
+This is a **development-only experiment**. Before considering a Runtime/Plugin release, it still needs repeated end-to-end fresh-session selection-quality evaluation, cancellation/Windows descendant-process verification, and cost/latency benchmarks against single-Pi behavior. It does not add MCP discovery or Jev/embedding/keyword routing. The P3 iteration below refines quality reasoning without replacing the full-coverage Skill fanout.
 
 ### P2 development dogfood (2026-10-08)
 
@@ -167,6 +167,47 @@ This is a **development-only experiment**. Before considering a Runtime/Plugin r
 - Separate real-model concurrent-Worker fixture: RDC PID 13984, exit 0. Two actual Pi Workers on two isolated test-only shards both returned complete, with 2.88 seconds total wall time (individual durations 2.40s and 2.87s). The Markdown-relevant shard selected its local fixture ID; the unrelated cloud-deployment shard returned no candidate. This fixture deliberately lowered shard size solely to force two Workers; the standard planner remains 256 KiB per shard.
 - Structured usage was captured but the provider reported 0 priced cost; this is not proof that API calls were free. Long-run token/cost/latency and selection-quality benchmarks remain outstanding.
 - Stable user installation and Plugin were not modified. Real `~/.agents/skills` was not synced. The new feature remains opt-in on the unmerged development branch.
+
+## P3: result quality is not Skill ranking (0.7.0-dev.3)
+
+The Skill fanout is a **recall mechanism**: every assigned Worker reads every full
+Skill description in its shard, with no lexical/embedding prefilter. However,
+a returned Skill is only a *candidate*, not proof that it best satisfies the
+task or that its runtime prerequisites are present.
+
+The Pi Main decision contract now:
+
+- Derives the user's actual success condition and restrictions before choosing.
+- Independently considers existing direct local options: editor/native UI features,
+  OS facilities, project scripts, and exact CLIs, even when no Skill was selected.
+- Uses targeted `read/ls/grep/find` and exact `command_resolve` for evidence;
+  a resolved CLI alone does not establish a plugin, renderer, service, or authentication.
+- Compares Skill and native options against the **same** success criteria.
+  A no-Skill solution may win; a conditional Skill must state its missing prerequisites.
+- Does not downgrade rendered output to merely opening/transporting a raw file.
+- Retains explicit Skill shard coverage and does not misrepresent it as full
+  inventory of every locally installed program.
+
+This is prompt-level semantic decision policy implemented in
+`lib/pi-advisor-decision.mjs`. It introduces no string matching or second
+Agent Router. Worker instructions additionally require explicit task-fit and
+unverified dependency notes. Pi 1.1.0's `--no-mcp` is set for the opt-in
+Main and ephemeral Workers, without changing the already installed Runtime.
+
+Quality regression originating this change: for a local Markdown book requiring
+graphical rendered preview with no installation or server, a prior run recommended
+`browser-skill` despite lacking evidence that the browser could render Markdown.
+A direct built-in editor preview is a better candidate when its CLI is verified.
+Tests cover the decision contract and source compatibility; real Pi quality
+must be assessed separately. P3's first live run uses RDC owner PID `21588`
+and was still pending at the time this section was drafted; do not mark PASS
+based solely on the process being started.
+
+Validation: `node --test runtime/capabilities.test.mjs runtime/skill-hub.test.mjs runtime/pi-advisor-fanout.test.mjs`
+has **57 PASS / 0 FAIL** for this source iteration. The stable local runtime
+remains `0.6.2`; the ChatGPT Plugin remains `0.6.5`. No Skill Hub `sync` was run.
+
+---
 
 ## Dogfood evidence
 
