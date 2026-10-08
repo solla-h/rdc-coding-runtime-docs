@@ -224,7 +224,7 @@ The related 2026-10-08 P3 evaluation harness is under `runtime/evaluation/`.
 It uses four synthetic capability descriptions in two deliberately small
 test-only shards; the **production 256 KiB shard target is unchanged**.
 Model-driven tests require `--execute-once` and are not part of the
-ordinary `node --test` unit suite. The installed runtime remains `0.6.2`.
+ordinary `node --test` unit suite. The complete isolated test suite passed **65/65**. Real source read-only lookup of `skill:hub:lark-shared` returned `found:true`, the selected original SKILL.md, and zero incomplete sources. The installed runtime remains `0.6.2`.
 
 ---
 
