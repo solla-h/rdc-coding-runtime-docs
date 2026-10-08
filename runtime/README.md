@@ -2,7 +2,7 @@
 
 This directory contains the local runtime used by the RDC Coding Runtime plugin's `how-to-use` capability advisor.
 
-Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions. **This development branch contains a not-yet-installed local runtime candidate `0.7.0-dev.1`** with Skill Hub discovery and planning. It does not modify the stable pin, user's installed runtime, or Plugin release.
+Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local capability runtime `0.6.2` from `main@8965d1761cbd50ce346b60a3646fc3b3c2549c52`. These are independent component versions. **This development branch contains a not-yet-installed local runtime candidate `0.7.0-dev.2`** with Skill Hub planning and opt-in parallel Pi advising. It does not modify the stable pin, user's installed runtime, or Plugin release.
 
 ## Files
 
@@ -17,6 +17,9 @@ Stable compatibility (currently installed): ChatGPT Plugin `0.6.5` uses local ca
 - `lib/skill-hub-roots.mjs` — verifies managed link targets before allowing `rdc-cap` discovery.
 - `lib/capability-shards.mjs` — deterministic, full-coverage 256 KiB candidate metadata partitioning.
 - `skill-hub.test.mjs` — isolated link, bundle, ownership, and 5,000-item shard regression coverage.
+- `pi-capability-fanout.ts` — opt-in Pi Main tool that plans shards and dispatches ephemeral Workers.
+- `lib/pi-advisor-fanout.mjs` — bounded concurrent Pi process scheduler, worker result validation and coverage reporting.
+- `pi-advisor-fanout.test.mjs` — worker process, structured output, concurrency and failure-path regressions.
 
 ## Local layout
 
@@ -131,9 +134,39 @@ Version choice is deterministic: identical **Skill directory content** is treate
 
 The syncer only replaces or removes its **own** unchanged links and persists ownership in `~/.rdc/skill-hub/links.json`. A changed real directory or redirected link is never overwritten. A lock file prevents concurrent syncs. Ledger updates occur after each successful action so a partial filesystem failure remains reconcilable. An external link becomes readable by `rdc-cap` only if the ledger, live link, and original target agree. Arbitrary external links are not allowed.
 
-`shard` uses the fully selected descriptions, stable hub IDs, source locations, and content fingerprints; it does not score, embed, semantically prefilter, or truncate candidates. The default is **262,144 UTF-8 bytes per shard** with `--parallelism 4`. An indivisible oversized item is retained intact and flagged. JSON output contains per-shard items for future Pi Workers; this P0/P1 slice **does not yet spawn parallel Pi subagents**. The development launcher has a 300,000 ms root advisory timeout; the installed 0.6.2 launcher retains its old limit until a separately reviewed release.
+`shard` uses the fully selected descriptions, stable hub IDs, source locations, and content fingerprints; it does not score, embed, semantically prefilter, or truncate candidates. The default is **262,144 UTF-8 bytes per shard** with `--parallelism 4`. An indivisible oversized item is retained intact and flagged. The `shard` command itself does not spawn any Pi process; only the opt-in P2 advisor invokes Workers. The development launcher has a 300,000 ms root advisory timeout; the installed 0.6.2 launcher retains its old limit until a separately reviewed release.
 
-Test with: `node --test runtime/skill-hub.test.mjs runtime/capabilities.test.mjs`. Do not run `sync` against the user's real hub as a side effect of testing or bootstrapping.
+Test with: `node --test runtime/capabilities.test.mjs runtime/skill-hub.test.mjs runtime/pi-advisor-fanout.test.mjs`. Do not run `sync` against the user's real hub as a side effect of testing or bootstrapping.
+
+## Experimental Parallel Pi Advisor (P2; 0.7.0-dev.2)
+
+Run the source candidate explicitly; it is **not** the installed CLI behavior:
+
+```powershell
+node runtime/how-to-use.mjs --parallel-advisor --workspace <repo> "Explain the current local capability needed for this read-only task."
+```
+
+The experimental option preserves the existing `how-to-use` single-Pi default when omitted. A short-lived Pi Main gets one additional tool, `capability_fanout`, then invokes the deterministic Skill Hub planner locally. It sends each complete shard as stdin to a separate ephemeral Pi Worker process. Main does not preload the full Skill catalog; each Worker gets all original descriptions from its assigned shard, without lexical filtering or retrieval scoring.
+
+Implementation specifics:
+
+- Worker command: actual local Pi CLI under PowerShell on Windows, `--mode json -p --no-session --no-skills --no-extensions --no-context-files --no-approve --no-tools`. Each Worker retains the dedicated Pi provider/model configuration; no new model credential files are created.
+- Input: full metadata shard via stdin, because 256 KiB does not fit reliably in Windows command-line arguments.
+- Model output: exact capability IDs only; at most five meaningful candidates per shard. IDs are validated against the assigned shard, with original descriptions included for Main's cross-shard reasoning.
+- Concurrency: default 4, experimental settings 1/2/4/8; one root RDC PID remains authoritative. Per-Worker timeout: 120 seconds; root `how-to-use` budget: 300 seconds including final synthesis.
+- Failure semantics: invalid Worker JSON, unknown IDs, timeout, cancellation and missing shards remain explicit `incomplete/failed` results. A failed Worker does not count as a negative Skill evaluation, and no blind subprocess retries are attempted.
+- Data: Skill Hub planning is performed in-memory and read-only. This mode never invokes the Hub's `sync` command. Pi Workers cannot execute source Skills or local business CLIs.
+- Test coverage: see `runtime/pi-advisor-fanout.test.mjs` for Windows process stdin, parallel scheduling, output validation, error/coverage handling and 5,000-item deterministic shard fixtures.
+
+This is a **development-only experiment**. Before considering a Runtime/Plugin release, it still needs repeated end-to-end fresh-session selection-quality evaluation, cancellation/Windows descendant-process verification, and cost/latency benchmarks against single-Pi behavior. It does not add MCP discovery or Jev/embedding/keyword routing.
+
+### P2 development dogfood (2026-10-08)
+
+- Windows Pi 0.87.1, Node 24.11.0; all 54 source tests passed (existing source + Skill Hub + P2); JavaScript syntax tests and diff checks passed.
+- Full source launcher with `--parallel-advisor`: RDC PID 39772, exit 0 after 31.17 seconds. Pi Main used one real Worker to cover 97 local Skill descriptions in one shard, no missing shard, and returned a grounded VS Code Markdown Preview recommendation. It did not sync/install local Skills.
+- Separate real-model concurrent-Worker fixture: RDC PID 13984, exit 0. Two actual Pi Workers on two isolated test-only shards both returned complete, with 2.88 seconds total wall time (individual durations 2.40s and 2.87s). The Markdown-relevant shard selected its local fixture ID; the unrelated cloud-deployment shard returned no candidate. This fixture deliberately lowered shard size solely to force two Workers; the standard planner remains 256 KiB per shard.
+- Structured usage was captured but the provider reported 0 priced cost; this is not proof that API calls were free. Long-run token/cost/latency and selection-quality benchmarks remain outstanding.
+- Stable user installation and Plugin were not modified. Real `~/.agents/skills` was not synced. The new feature remains opt-in on the unmerged development branch.
 
 ## Dogfood evidence
 
