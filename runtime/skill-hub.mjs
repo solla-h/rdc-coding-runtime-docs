@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { planSkillHub, syncSkillHub, ledgerPath } from "./lib/skill-hub.mjs";
+import { CAPABILITY_RUNTIME_VERSION } from "./lib/capabilities.mjs";
 import { shardHubSelection, DEFAULT_SHARD_BYTES, DEFAULT_PARALLELISM } from "./lib/capability-shards.mjs";
 
 function usage() {
@@ -92,6 +93,8 @@ try {
   const { command, json, options, targetBytes, parallelism } = parseArgs(process.argv.slice(2));
   if (!command || ["-h", "--help", "help"].includes(command)) {
     console.log(usage());
+  } else if (["-V", "--version"].includes(command)) {
+    console.log("skill-hub " + CAPABILITY_RUNTIME_VERSION);
   } else if (command === "plan" || command === "sync") {
     const result = command === "plan" ? planSkillHub(options) : syncSkillHub(options);
     console.log(json ? JSON.stringify(result, null, 2) : render(result));
